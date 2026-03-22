@@ -1,0 +1,80 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+model TournamentState {
+  id               Int    @id
+  tournamentStatus String
+  currentCycle     Int?
+  currentStage     String
+  checkedInTeams   Int
+  totalTeams       Int
+  activeMatch      String
+}
+
+model ReviewState {
+  id                Int     @id
+  pendingTeamsCount Int
+  approvedTeamsCount Int
+  deniedTeamsCount  Int
+  currentPendingTeam String?
+  approvedTeams     String
+  deniedTeams       String
+}
+
+model Team {
+  id             Int    @id
+  teamName       String
+  captainName    String
+  playerNames    String
+  substituteName String
+  approvalStatus String
+  checkInStatus  String
+}
+
+model MatchAssignment {
+  id               Int    @id
+  teamName         String
+  opponentTeamName String
+  cycleNumber      Int
+  stageName        String
+}
+
+model ReportSubmission {
+  id               Int      @id @default(autoincrement())
+  score            String
+  matchAssignmentId Int
+  submittedByDiscordUserId String
+  submittedByDisplayName String
+  teamName         String
+  opponentTeamName String
+  cycleNumber      Int
+  stageName        String
+  notes            String
+  status           String
+  submittedAt      DateTime
+}
+
+model Standing {
+  id        Int      @id @default(autoincrement())
+  teamName  String
+  frp       Int
+  updatedAt DateTime
+}
+
+model CycleResult {
+  id                  Int      @id @default(autoincrement())
+  cycleNumber         Int
+  matchAssignmentId   Int      @unique
+  reportSubmissionId  Int      @unique
+  teamName            String
+  opponentTeamName    String
+  score               String
+  frpAwardedToTeam    Int
+  frpAwardedToOpponent Int
+  recordedAt          DateTime
+}
