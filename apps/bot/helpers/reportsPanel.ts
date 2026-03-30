@@ -11,11 +11,11 @@ import {
 } from "../storage/reportSubmissions";
 
 function getReportStatusColor(status: string): ColorResolvable {
-  if (status === "approved") {
+  if (status === "reviewed") {
     return 0x57f287;
   }
 
-  if (status === "rejected") {
+  if (status === "dismissed") {
     return 0xed4245;
   }
 
@@ -34,9 +34,9 @@ export async function buildReportsPanel(
 
   const summaryEmbed = new EmbedBuilder()
     .setTitle("Development Division Recent Reports")
-    .setDescription(
+      .setDescription(
       reports.length > 0
-        ? `Latest stored match result submissions (${filterLabel})`
+        ? `Latest informational team-leader result submissions (${filterLabel})`
         : `No reports submitted yet for ${filterLabel}.`
     );
 
@@ -105,11 +105,11 @@ export async function buildReportsPanel(
       .setStyle(ButtonStyle.Primary),
     new ButtonBuilder()
       .setCustomId("reports_approve_latest")
-      .setLabel("Approve Latest")
+      .setLabel("Mark Reviewed")
       .setStyle(ButtonStyle.Success),
     new ButtonBuilder()
       .setCustomId("reports_reject_latest")
-      .setLabel("Reject Latest")
+      .setLabel("Dismiss Latest")
       .setStyle(ButtonStyle.Danger)
   );
 
@@ -124,11 +124,11 @@ export async function buildReportsPanel(
       .setStyle(ButtonStyle.Secondary),
     new ButtonBuilder()
       .setCustomId("reports_filter_approved")
-      .setLabel("Approved Reports")
+      .setLabel("Reviewed Reports")
       .setStyle(ButtonStyle.Secondary),
     new ButtonBuilder()
       .setCustomId("reports_filter_rejected")
-      .setLabel("Rejected Reports")
+      .setLabel("Dismissed Reports")
       .setStyle(ButtonStyle.Secondary)
   );
 

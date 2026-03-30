@@ -1,5 +1,6 @@
 import { ChatInputCommandInteraction } from "discord.js";
 import { BotCommand } from "../commands/types";
+import { authorizeSlashCommand } from "../helpers/permissions";
 
 export async function handleCommandInteraction(
   interaction: ChatInputCommandInteraction,
@@ -10,6 +11,12 @@ export async function handleCommandInteraction(
   );
 
   if (!command) return;
+
+  const isAuthorized = await authorizeSlashCommand(interaction);
+
+  if (!isAuthorized) {
+    return;
+  }
 
   await command.execute(interaction);
 }

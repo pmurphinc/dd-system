@@ -11,7 +11,19 @@ export const teamCommand: BotCommand = {
     .setDescription("Shows the team panel"),
 
   async execute(interaction: ChatInputCommandInteraction) {
-    const teamPanel = await buildTeamPanel(interaction.user.id);
+    if (!interaction.inCachedGuild()) {
+      await interaction.reply({
+        content: "This command must be used inside the guild.",
+        ephemeral: true,
+      });
+      return;
+    }
+
+    const teamPanel = await buildTeamPanel(
+      interaction.user.id,
+      interaction.guildId,
+      interaction.inCachedGuild() ? interaction.member.roles : undefined
+    );
 
     await interaction.reply({
       ...teamPanel,

@@ -8,8 +8,8 @@ import {
 } from "discord.js";
 import { BotCommand } from "./types";
 import { getTournamentProgressSummary } from "../helpers/tournamentProgress";
-import { getMockReviewData } from "../mocks/reviewData";
-import { getMockTournamentState } from "../mocks/tournamentState";
+import { getTournamentState } from "../mocks/tournamentState";
+import { getRegistrationSummary } from "../storage/registrations";
 import { getStandings } from "../storage/standings";
 
 export const statusCommand: BotCommand = {
@@ -18,9 +18,9 @@ export const statusCommand: BotCommand = {
     .setDescription("Shows the current tournament status"),
 
   async execute(interaction: ChatInputCommandInteraction) {
-    const tournamentState = await getMockTournamentState();
+    const tournamentState = await getTournamentState();
     const progressSummary = await getTournamentProgressSummary(tournamentState);
-    const reviewData = await getMockReviewData();
+    const reviewData = await getRegistrationSummary();
     const standings = await getStandings();
     const standingsSummary = standings
       .slice(0, 4)
@@ -70,17 +70,17 @@ export const statusCommand: BotCommand = {
         },
         {
           name: "Pending Reviews",
-          value: `${reviewData.pendingTeamsCount}`,
+          value: `${reviewData.pendingCount}`,
           inline: true,
         },
         {
           name: "Approved Teams",
-          value: `${reviewData.approvedTeamsCount}`,
+          value: `${reviewData.approvedCount}`,
           inline: true,
         },
         {
-          name: "Denied Teams",
-          value: `${reviewData.deniedTeamsCount}`,
+          name: "Rejected Teams",
+          value: `${reviewData.rejectedCount}`,
           inline: true,
         },
         {
@@ -89,7 +89,7 @@ export const statusCommand: BotCommand = {
           inline: false,
         }
       )
-      .setFooter({ text: "Mock tournament state for development" });
+      .setFooter({ text: "Live event operations status" });
 
     const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
       new ButtonBuilder()

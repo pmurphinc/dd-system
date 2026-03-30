@@ -1,0 +1,734 @@
+import { createSign } from "crypto";
+import {
+  createRegistrationSubmission,
+  hasRegistrationSourceRowKey,
+  RegistrationPlayerInput,
+} from "../storage/registrations";
+import {
+  logRegistrationSyncFailure,
+  logRegistrationSyncPollComplete,
+  logRegistrationSyncPollStart,
+  recordRegistrationSyncIssue,
+  upsertRegistrationSyncSourceState,
+} from "../storage/registrationSync";
+
+interface SheetSyncSourceConfig {
+  sourceKey: string;
+  sourceLabel: string;
+  spreadsheetId: string;
+  worksheetTitle?: string;
+  enabled: boolean;
+}
+
+interface RegistrationSyncConfig {
+  enabled: boolean;
+  intervalMs: number;
+  serviceAccountEmail?: string;
+  privateKey?: string;
+  scopes: string[];
+  sources: SheetSyncSourceConfig[];
+}
+
+interface NormalizedSheetRow {
+  rowKey: string;
+  rowNumber: number;
+  teamName: string;
+  leaderDiscordIdentifier: string;
+  leaderDisplayName: string;
+  discordCommunity: string | null;
+  originalSubmittedAt: Date | null;
+  mapBan: string | null;
+  submittedNotes: string;
+  players: RegistrationPlayerInput[];
+}
+
+let syncIntervalHandle: NodeJS.Timeout | undefined;
+let pollInFlight = false;
+
+const GOOGLE_SHEETS_READONLY_SCOPE =
+  "https://www.googleapis.com/auth/spreadsheets.readonly";
+
+function boolFromEnv(value: string | undefined, fallback: boolean): boolean {
+  if (value === undefined) {
+    return fallback;
+  }
+
+  return !["0", "false", "off", "no"].includes(value.trim().toLowerCase());
+}
+
+function normalizePrivateKey(value: string | undefined): string | undefined {
+  return value?.replace(/\\n/g, "\n").trim() || undefined;
+}
+
+export function getRegistrationSyncConfig(): RegistrationSyncConfig {
+  const intervalSeconds = Number(
+    process.env.GOOGLE_SHEETS_SYNC_INTERVAL_SECONDS ?? "120"
+  );
+  const serviceAccountEmail = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL?.trim();
+  const privateKey = normalizePrivateKey(
+    process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY
+  );
+  const sources: SheetSyncSourceConfig[] = [
+    {
+      sourceKey: "dd_registration",
+      sourceLabel:
+        process.env.GOOGLE_SHEET_REGISTRATION_LABEL?.trim() ||
+        "Development Division Registration Form",
+      spreadsheetId: process.env.GOOGLE_SHEET_REGISTRATION_ID?.trim() || "",
+      worksheetTitle:
+        process.env.GOOGLE_SHEET_REGISTRATION_TAB?.trim() || undefined,
+      enabled: boolFromEnv(process.env.GOOGLE_SHEET_REGISTRATION_ENABLED, true),
+    },
+  ];
+
+  return {
+    enabled: boolFromEnv(process.env.GOOGLE_SHEETS_SYNC_ENABLED, true),
+    intervalMs:
+      Number.isFinite(intervalSeconds) && intervalSeconds > 0
+        ? intervalSeconds * 1000
+        : 120_000,
+    serviceAccountEmail,
+    privateKey,
+    scopes: [GOOGLE_SHEETS_READONLY_SCOPE],
+    sources,
+  };
+}
+
+export function isRegistrationSyncAuthConfigured(
+  config = getRegistrationSyncConfig()
+): boolean {
+  return Boolean(config.serviceAccountEmail && config.privateKey);
+}
+
+function normalizeHeader(header: string): string {
+  return header.toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+function readCell(row: string[], index: number | undefined): string {
+  return (index === undefined ? "" : row[index] ?? "").trim();
+}
+
+function normalizeLinkCell(value: string): string {
+  const trimmed = value.trim();
+
+  if (!trimmed) {
+    return "";
+  }
+
+  const urls = trimmed.match(/https?:\/\/\S+/gi) ?? [];
+
+  if (urls.length > 0) {
+    return Array.from(
+      new Set(urls.map((url) => url.replace(/[),.;]+$/g, "")))
+    ).join("\n");
+  }
+
+  return trimmed;
+}
+
+function inferOrderFromHeader(header: string): number {
+  const normalized = normalizeHeader(header);
+
+  if (normalized.includes("leader") || normalized.includes("captain")) {
+    return 0;
+  }
+
+  if (normalized.includes("sub") || normalized.includes("substitute")) {
+    return 4;
+  }
+
+  if (normalized.includes("player1") || normalized.includes("one")) {
+    return 1;
+  }
+
+  if (normalized.includes("player2") || normalized.includes("two")) {
+    return 2;
+  }
+
+  if (normalized.includes("player3") || normalized.includes("three")) {
+    return 3;
+  }
+
+  if (normalized.includes("player4") || normalized.includes("four")) {
+    return 4;
+  }
+
+  return 99;
+}
+
+function findFirstIndex(
+  headers: string[],
+  matcher: (normalized: string) => boolean
+) {
+  return headers.findIndex((header) => matcher(normalizeHeader(header)));
+}
+
+function findAllIndexes(
+  headers: string[],
+  matcher: (normalized: string) => boolean
+) {
+  return headers
+    .map((header, index) => ({ header, normalized: normalizeHeader(header), index }))
+    .filter(({ normalized }) => matcher(normalized));
+}
+
+function findDiscordCommunityIndex(headers: string[]): number {
+  return findFirstIndex(headers, (normalized) => {
+    const hasDiscord = normalized.includes("discord");
+    const hasCommunity = normalized.includes("community");
+    const hasServer = normalized.includes("server");
+    const hasFrom =
+      normalized.includes("from") ||
+      normalized.includes("comingfrom") ||
+      normalized.includes("origin");
+
+    return (
+      (hasDiscord && hasFrom) ||
+      (hasDiscord && hasCommunity) ||
+      (hasServer && hasFrom)
+    );
+  });
+}
+
+function findTeamNameIndex(headers: string[]): number {
+  return findFirstIndex(
+    headers,
+    (normalized) => normalized.includes("team") && normalized.includes("name")
+  );
+}
+
+function parseSubmittedAt(value: string): Date | null {
+  const trimmed = value.trim();
+
+  if (!trimmed) {
+    return null;
+  }
+
+  const parsed = new Date(trimmed);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function buildSubmittedNotes(parts: Array<string | null | undefined>): string {
+  return parts
+    .map((part) => part?.trim())
+    .filter((part): part is string => Boolean(part))
+    .join("\n");
+}
+
+function normalizeOptionalValue(value: string): string | null {
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+}
+
+function normalizeRow(
+  source: SheetSyncSourceConfig,
+  worksheetTitle: string,
+  headers: string[],
+  row: string[],
+  rowNumber: number
+): NormalizedSheetRow {
+  const teamNameIndex = findTeamNameIndex(headers);
+  const timestampIndex = findFirstIndex(
+    headers,
+    (normalized) => normalized === "timestamp" || normalized.includes("submitted")
+  );
+  const mapBanIndex = findFirstIndex(
+    headers,
+    (normalized) => normalized.includes("map") && normalized.includes("ban")
+  );
+  const leaderDiscordIndex = findFirstIndex(
+    headers,
+    (normalized) =>
+      (normalized.includes("leader") || normalized.includes("captain")) &&
+      normalized.includes("discord")
+  );
+  const leaderNameIndex = findFirstIndex(
+    headers,
+    (normalized) =>
+      (normalized.includes("leader") || normalized.includes("captain")) &&
+      normalized.includes("name")
+  );
+  const discordCommunityIndex = findDiscordCommunityIndex(headers);
+  const embarkColumns = findAllIndexes(
+    headers,
+    (normalized) =>
+      normalized.includes("embark") ||
+      (normalized.includes("player") && normalized.endsWith("id")) ||
+      (normalized.includes("leader") && normalized.endsWith("id")) ||
+      (normalized.includes("captain") && normalized.endsWith("id"))
+  ).sort(
+    (left, right) => inferOrderFromHeader(left.header) - inferOrderFromHeader(right.header)
+  );
+  const screenshotColumns = findAllIndexes(
+    headers,
+    (normalized) =>
+      normalized.includes("screenshot") ||
+      normalized.includes("proof") ||
+      normalized.includes("image")
+  );
+  const playerNameColumns = findAllIndexes(
+    headers,
+    (normalized) =>
+      normalized.includes("name") &&
+      (normalized.includes("player") ||
+        normalized.includes("leader") ||
+        normalized.includes("captain") ||
+        normalized.includes("sub"))
+  );
+
+  const teamName = readCell(row, teamNameIndex);
+
+  if (!teamName) {
+    throw new Error("Missing team name.");
+  }
+
+  const embarkEntries = embarkColumns
+    .map(({ header, index }) => ({
+      order: inferOrderFromHeader(header),
+      embarkId: readCell(row, index),
+      displayName:
+        readCell(
+          row,
+          playerNameColumns.find(
+            (column) =>
+              inferOrderFromHeader(column.header) === inferOrderFromHeader(header)
+          )?.index
+        ) || "",
+      screenshotLink: normalizeLinkCell(
+        readCell(
+          row,
+          screenshotColumns.find(
+            (column) =>
+              inferOrderFromHeader(column.header) === inferOrderFromHeader(header)
+          )?.index
+        )
+      ),
+    }))
+    .filter((entry) => entry.embarkId);
+
+  if (embarkEntries.length < 3) {
+    throw new Error("Fewer than 3 player Embark IDs were found.");
+  }
+
+  const leaderEntry = embarkEntries.find((entry) => entry.order === 0) ?? embarkEntries[0];
+  const leaderDisplayName =
+    readCell(row, leaderNameIndex) || leaderEntry.displayName || "Leader";
+  const fallbackScreenshot = normalizeLinkCell(
+    readCell(row, screenshotColumns[0]?.index)
+  );
+
+  const players = embarkEntries
+    .sort((left, right) => left.order - right.order)
+    .map((entry, index) => ({
+      displayName:
+        index === 0
+          ? leaderDisplayName
+          : entry.displayName || (entry.order === 4 ? "Substitute" : `Player ${index + 1}`),
+      embarkId: entry.embarkId.trim(),
+      screenshotLink: entry.screenshotLink || fallbackScreenshot,
+      discordUserId:
+        index === 0
+          ? readCell(row, leaderDiscordIndex).replace(/[<@!>]/g, "").trim()
+          : undefined,
+      isLeader: index === 0,
+      sortOrder: index,
+    }));
+
+  const rowKey = `${source.spreadsheetId}:${worksheetTitle}:${rowNumber}`;
+  return {
+    rowKey,
+    rowNumber,
+    teamName,
+    leaderDiscordIdentifier: readCell(row, leaderDiscordIndex)
+      .replace(/[<@!>]/g, "")
+      .trim(),
+    leaderDisplayName,
+    discordCommunity: normalizeOptionalValue(readCell(row, discordCommunityIndex)),
+    originalSubmittedAt: parseSubmittedAt(readCell(row, timestampIndex)),
+    mapBan: readCell(row, mapBanIndex) || null,
+    submittedNotes: buildSubmittedNotes([
+      readCell(row, mapBanIndex) ? `Map Ban: ${readCell(row, mapBanIndex)}` : null,
+      `Synced from ${source.sourceLabel} row ${rowNumber}.`,
+    ]),
+    players,
+  };
+}
+
+function toBase64Url(input: string): string {
+  return Buffer.from(input).toString("base64url");
+}
+
+function quoteWorksheetTitleForA1(worksheetTitle: string): string {
+  return `'${worksheetTitle.replace(/'/g, "''")}'`;
+}
+
+function buildWorksheetA1Range(worksheetTitle: string): string {
+  return `${quoteWorksheetTitleForA1(worksheetTitle)}!A:ZZ`;
+}
+
+async function readGoogleErrorBody(response: Response): Promise<string> {
+  const rawBody = await response.text();
+
+  if (!rawBody) {
+    return "No response body.";
+  }
+
+  try {
+    const parsed = JSON.parse(rawBody) as {
+      error?: {
+        message?: string;
+        status?: string;
+        errors?: Array<{ message?: string; reason?: string }>;
+      };
+    };
+    const topLevelMessage = parsed.error?.message ?? rawBody;
+    const reasons =
+      parsed.error?.errors
+        ?.map((entry) => [entry.reason, entry.message].filter(Boolean).join(": "))
+        .filter(Boolean)
+        .join(" | ") ?? "";
+
+    return reasons ? `${topLevelMessage} | ${reasons}` : topLevelMessage;
+  } catch {
+    return rawBody;
+  }
+}
+
+async function getGoogleAccessToken(config: RegistrationSyncConfig): Promise<string> {
+  if (!config.serviceAccountEmail || !config.privateKey) {
+    throw new Error(
+      "Missing GOOGLE_SERVICE_ACCOUNT_EMAIL and/or GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY."
+    );
+  }
+
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const header = { alg: "RS256", typ: "JWT" };
+  const payload = {
+    iss: config.serviceAccountEmail,
+    scope: config.scopes.join(" "),
+    aud: "https://oauth2.googleapis.com/token",
+    exp: nowSeconds + 3600,
+    iat: nowSeconds,
+  };
+  const signingInput = `${toBase64Url(JSON.stringify(header))}.${toBase64Url(
+    JSON.stringify(payload)
+  )}`;
+  const signer = createSign("RSA-SHA256");
+  signer.update(signingInput);
+  const signature = signer.sign(config.privateKey, "base64url");
+  const assertion = `${signingInput}.${signature}`;
+  const response = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: new URLSearchParams({
+      grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+      assertion,
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Google auth failed with ${response.status}.`);
+  }
+
+  const body = (await response.json()) as { access_token?: string };
+
+  if (!body.access_token) {
+    throw new Error("Google auth response did not include an access token.");
+  }
+
+  return body.access_token;
+}
+
+async function fetchSpreadsheetMetadata(
+  spreadsheetId: string,
+  accessToken: string
+): Promise<{ title: string }[]> {
+  const response = await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}?fields=sheets(properties(title,index))`,
+    {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+    }
+  );
+
+  if (!response.ok) {
+    const errorBody = await readGoogleErrorBody(response);
+    throw new Error(
+      `Google Sheets metadata fetch failed with ${response.status}: ${errorBody}`
+    );
+  }
+
+  const body = (await response.json()) as {
+    sheets?: Array<{ properties?: { title?: string } }>;
+  };
+
+  return (body.sheets ?? [])
+    .map((sheet) => ({ title: sheet.properties?.title ?? "" }))
+    .filter((sheet) => sheet.title);
+}
+
+async function fetchSheetValues(
+  source: SheetSyncSourceConfig,
+  spreadsheetId: string,
+  worksheetTitle: string,
+  requestedRange: string,
+  accessToken: string
+): Promise<string[][]> {
+  const range = encodeURIComponent(requestedRange);
+  const response = await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${range}`,
+    {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+    }
+  );
+
+  if (!response.ok) {
+    const errorBody = await readGoogleErrorBody(response);
+    throw new Error(
+      [
+        `Google Sheets values fetch failed with ${response.status}.`,
+        `Source: ${source.sourceLabel}`,
+        `Spreadsheet: ${spreadsheetId}`,
+        `Worksheet: ${worksheetTitle}`,
+        `Range: ${requestedRange}`,
+        `Auth initialized: yes`,
+        `Scopes: ${getRegistrationSyncConfig().scopes.join(", ")}`,
+        `Google error: ${errorBody}`,
+      ].join(" ")
+    );
+  }
+
+  const body = (await response.json()) as { values?: string[][] };
+  return body.values ?? [];
+}
+
+async function syncSource(
+  source: SheetSyncSourceConfig,
+  config: RegistrationSyncConfig,
+  accessToken: string
+): Promise<void> {
+  if (!source.enabled) {
+    await upsertRegistrationSyncSourceState({
+      sourceKey: source.sourceKey,
+      sourceLabel: source.sourceLabel,
+      spreadsheetId: source.spreadsheetId,
+      worksheetTitle: source.worksheetTitle ?? null,
+      lastResolvedRange: source.worksheetTitle
+        ? buildWorksheetA1Range(source.worksheetTitle)
+        : null,
+      enabled: false,
+      lastImportedCount: 0,
+      lastDuplicateCount: 0,
+      lastInvalidCount: 0,
+    });
+    return;
+  }
+
+  await logRegistrationSyncPollStart(source.sourceLabel);
+
+  try {
+    const worksheetTitle =
+      source.worksheetTitle ??
+      (await fetchSpreadsheetMetadata(source.spreadsheetId, accessToken))[0]?.title;
+
+    if (!worksheetTitle) {
+      throw new Error("No worksheet title was configured or discovered.");
+    }
+
+    const requestedRange = buildWorksheetA1Range(worksheetTitle);
+
+    const values = await fetchSheetValues(
+      source,
+      source.spreadsheetId,
+      worksheetTitle,
+      requestedRange,
+      accessToken
+    );
+    const headers = values[0] ?? [];
+    let imported = 0;
+    let duplicates = 0;
+    let invalid = 0;
+
+    for (let index = 1; index < values.length; index += 1) {
+      const row = values[index] ?? [];
+      const rowNumber = index + 1;
+      const rowKey = `${source.spreadsheetId}:${worksheetTitle}:${rowNumber}`;
+
+      if (row.every((cell) => !cell?.trim())) {
+        continue;
+      }
+
+      if (await hasRegistrationSourceRowKey(rowKey)) {
+        duplicates += 1;
+        continue;
+      }
+
+      try {
+        const normalized = normalizeRow(
+          source,
+          worksheetTitle,
+          headers,
+          row,
+          rowNumber
+        );
+
+        await createRegistrationSubmission({
+          teamName: normalized.teamName,
+          leaderDiscordUserId: normalized.leaderDiscordIdentifier,
+          leaderDisplayName: normalized.leaderDisplayName,
+          discordCommunity: normalized.discordCommunity,
+          sourceLabel: source.sourceLabel,
+          sourceSpreadsheetId: source.spreadsheetId,
+          sourceWorksheetTitle: worksheetTitle,
+          sourceRowKey: normalized.rowKey,
+          sourceRowNumber: normalized.rowNumber,
+          originalSubmittedAt: normalized.originalSubmittedAt,
+          mapBan: normalized.mapBan ?? undefined,
+          syncImportedAt: new Date(),
+          submittedNotes: normalized.submittedNotes,
+          createdByDiscordUserId: "google-sheets-sync",
+          createdByDisplayName: "Google Sheets Sync",
+          players: normalized.players,
+        });
+        imported += 1;
+      } catch (error) {
+        invalid += 1;
+
+        const teamNameIndex = findTeamNameIndex(headers);
+
+        await recordRegistrationSyncIssue({
+          sourceKey: source.sourceKey,
+          sourceLabel: source.sourceLabel,
+          spreadsheetId: source.spreadsheetId,
+          worksheetTitle,
+          rowKey,
+          rowNumber,
+          rawTeamName: readCell(row, teamNameIndex) || null,
+          reason: error instanceof Error ? error.message : "Unknown row parse error.",
+        });
+      }
+    }
+
+    await upsertRegistrationSyncSourceState({
+      sourceKey: source.sourceKey,
+      sourceLabel: source.sourceLabel,
+      spreadsheetId: source.spreadsheetId,
+      worksheetTitle,
+      lastResolvedRange: requestedRange,
+      enabled: true,
+      lastCheckedAt: new Date(),
+      lastSuccessfulSyncAt: new Date(),
+      lastImportedCount: imported,
+      lastDuplicateCount: duplicates,
+      lastInvalidCount: invalid,
+      lastError: null,
+    });
+
+    await logRegistrationSyncPollComplete({
+      sourceLabel: source.sourceLabel,
+      imported,
+      duplicates,
+      invalid,
+    });
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Unknown Google Sheets sync error.";
+    await upsertRegistrationSyncSourceState({
+      sourceKey: source.sourceKey,
+      sourceLabel: source.sourceLabel,
+      spreadsheetId: source.spreadsheetId,
+      worksheetTitle: source.worksheetTitle ?? null,
+      lastResolvedRange: source.worksheetTitle
+        ? buildWorksheetA1Range(source.worksheetTitle)
+        : null,
+      enabled: true,
+      lastCheckedAt: new Date(),
+      lastImportedCount: 0,
+      lastDuplicateCount: 0,
+      lastInvalidCount: 0,
+      lastError: message,
+    });
+    await logRegistrationSyncFailure({
+      sourceLabel: source.sourceLabel,
+      errorMessage: message,
+    });
+    console.error(`[registration-sync] ${source.sourceLabel}: ${message}`);
+  }
+}
+
+export async function pollRegistrationSheetsOnce(): Promise<void> {
+  const config = getRegistrationSyncConfig();
+
+  if (!config.enabled) {
+    return;
+  }
+
+  if (pollInFlight) {
+    return;
+  }
+
+  pollInFlight = true;
+
+  try {
+    const accessToken = await getGoogleAccessToken(config);
+
+    for (const source of config.sources) {
+      await syncSource(source, config, accessToken);
+    }
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Unknown registration sync error.";
+    console.error(`[registration-sync] startup poll failed: ${message}`);
+  } finally {
+    pollInFlight = false;
+  }
+}
+
+export function startRegistrationSheetSyncPolling(): void {
+  const config = getRegistrationSyncConfig();
+
+  if (!config.enabled) {
+    console.log("[registration-sync] polling disabled via env.");
+    return;
+  }
+
+  if (!config.serviceAccountEmail || !config.privateKey) {
+    console.error(
+      "[registration-sync] missing Google service account config; polling not started."
+    );
+    return;
+  }
+
+  const enabledSources = config.sources.filter((source) => source.enabled);
+
+  if (enabledSources.length === 0 || !enabledSources[0]?.spreadsheetId) {
+    console.error(
+      "[registration-sync] missing GOOGLE_SHEET_REGISTRATION_ID or no enabled registration source; polling not started."
+    );
+    return;
+  }
+
+  if (syncIntervalHandle) {
+    return;
+  }
+
+  void pollRegistrationSheetsOnce();
+  syncIntervalHandle = setInterval(() => {
+    void pollRegistrationSheetsOnce();
+  }, config.intervalMs);
+  syncIntervalHandle.unref?.();
+
+  console.log(
+    `[registration-sync] polling ${config.sources
+      .filter((source) => source.enabled)
+      .map((source) => source.sourceLabel)
+      .join(", ")} every ${Math.round(config.intervalMs / 1000)}s. scopes=${config.scopes.join(
+      ","
+    )}`
+  );
+}

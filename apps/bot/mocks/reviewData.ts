@@ -165,7 +165,7 @@ export async function denyCurrentPendingTeam(): Promise<MockReviewData> {
 
   const deniedTeam: MockDeniedTeam = {
     ...reviewData.currentPendingTeam,
-    denialReason: "Denied by admin during mock review flow.",
+    denialReason: "Denied by admin during review.",
   };
 
   const updatedReviewData: MockReviewData = {

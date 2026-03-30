@@ -13,7 +13,14 @@ export const helpCommand: BotCommand = {
   async execute(interaction: ChatInputCommandInteraction) {
     const embed = new EmbedBuilder()
       .setTitle("Available Commands")
-      .setDescription("/ping\n/register\n/team");
+      .setDescription(
+        [
+          "Public: /register /standings /help /ping",
+          "Participant: /team /match /checkin (opens /team) /report",
+          "Admin: /review /reports /tournament /status /cycleresults /syncstatus",
+          "Founder: /admin",
+        ].join("\n")
+      );
 
     await interaction.reply({
       embeds: [embed],

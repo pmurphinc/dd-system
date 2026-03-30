@@ -1,6 +1,8 @@
 import { PrismaDbClient, prisma } from "./prisma";
 
 export interface ReportSubmissionInput {
+  tournamentInstanceId: number | null;
+  teamId: number | null;
   score: string;
   matchAssignmentId: number;
   submittedByDiscordUserId: string;
@@ -21,8 +23,8 @@ export interface StoredReportSubmission extends ReportSubmissionInput {
 export type ReportSubmissionStatusFilter =
   | "all"
   | "pending"
-  | "approved"
-  | "rejected";
+  | "reviewed"
+  | "dismissed";
 
 let reportSubmissionTableReady: Promise<void> | undefined;
 
@@ -32,6 +34,8 @@ async function ensureReportSubmissionTable(): Promise<void> {
       await prisma.$executeRawUnsafe(`
         CREATE TABLE IF NOT EXISTS "ReportSubmission" (
           "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+          "tournamentInstanceId" INTEGER NOT NULL DEFAULT 0,
+          "teamId" INTEGER NOT NULL DEFAULT 0,
           "score" TEXT NOT NULL,
           "matchAssignmentId" INTEGER NOT NULL,
           "submittedByDiscordUserId" TEXT NOT NULL DEFAULT '',
@@ -59,6 +63,10 @@ async function ensureReportSubmissionTable(): Promise<void> {
       const hasSubmittedByDisplayNameColumn = columns.some(
         (column) => column.name === "submittedByDisplayName"
       );
+      const hasTournamentInstanceIdColumn = columns.some(
+        (column) => column.name === "tournamentInstanceId"
+      );
+      const hasTeamIdColumn = columns.some((column) => column.name === "teamId");
 
       if (!hasStatusColumn) {
         await prisma.$executeRawUnsafe(`
@@ -87,6 +95,20 @@ async function ensureReportSubmissionTable(): Promise<void> {
           ADD COLUMN "submittedByDisplayName" TEXT NOT NULL DEFAULT ''
         `);
       }
+
+      if (!hasTournamentInstanceIdColumn) {
+        await prisma.$executeRawUnsafe(`
+          ALTER TABLE "ReportSubmission"
+          ADD COLUMN "tournamentInstanceId" INTEGER NOT NULL DEFAULT 0
+        `);
+      }
+
+      if (!hasTeamIdColumn) {
+        await prisma.$executeRawUnsafe(`
+          ALTER TABLE "ReportSubmission"
+          ADD COLUMN "teamId" INTEGER NOT NULL DEFAULT 0
+        `);
+      }
     });
 
   await reportSubmissionTableReady;
@@ -94,10 +116,10 @@ async function ensureReportSubmissionTable(): Promise<void> {
 
 export async function createReportSubmission(
   input: ReportSubmissionInput
-): Promise<void> {
+): Promise<StoredReportSubmission> {
   await ensureReportSubmissionTable();
 
-  await prisma.reportSubmission.create({
+  return prisma.reportSubmission.create({
     data: {
       ...input,
       status: "pending",
@@ -107,7 +129,8 @@ export async function createReportSubmission(
 }
 
 export async function hasPendingReportSubmissionForAssignment(
-  matchAssignmentId: number
+  matchAssignmentId: number,
+  teamId?: number
 ): Promise<boolean> {
   await ensureReportSubmissionTable();
 
@@ -115,6 +138,7 @@ export async function hasPendingReportSubmissionForAssignment(
     where: {
       matchAssignmentId,
       status: "pending",
+      ...(teamId === undefined ? {} : { teamId }),
     },
   });
 
@@ -123,16 +147,26 @@ export async function hasPendingReportSubmissionForAssignment(
 
 export async function getRecentReportSubmissions(
   limit = 5,
-  statusFilter: ReportSubmissionStatusFilter = "all"
+  statusFilter: ReportSubmissionStatusFilter = "all",
+  tournamentInstanceId?: number
 ): Promise<StoredReportSubmission[]> {
   await ensureReportSubmissionTable();
 
   return prisma.reportSubmission.findMany({
     where:
       statusFilter === "all"
-        ? undefined
+        ? tournamentInstanceId === undefined
+          ? undefined
+          : {
+              tournamentInstanceId,
+            }
         : {
             status: statusFilter,
+            ...(tournamentInstanceId === undefined
+              ? {}
+              : {
+                  tournamentInstanceId,
+                }),
           },
     orderBy: { submittedAt: "desc" },
     take: limit,
@@ -140,12 +174,20 @@ export async function getRecentReportSubmissions(
 }
 
 export async function getPendingReportSubmissions(
-  limit = 25
+  limit = 25,
+  tournamentInstanceId?: number
 ): Promise<StoredReportSubmission[]> {
   await ensureReportSubmissionTable();
 
   return prisma.reportSubmission.findMany({
-    where: { status: "pending" },
+    where: {
+      status: "pending",
+      ...(tournamentInstanceId === undefined
+        ? {}
+        : {
+            tournamentInstanceId,
+          }),
+    },
     orderBy: { submittedAt: "desc" },
     take: limit,
   });
@@ -156,6 +198,23 @@ export async function getLatestPendingReportSubmission(): Promise<StoredReportSu
 
   return prisma.reportSubmission.findFirst({
     where: { status: "pending" },
+    orderBy: { submittedAt: "desc" },
+  });
+}
+
+export async function listInformationalReportsForTeam(
+  tournamentInstanceId: number,
+  teamId: number,
+  cycleNumber?: number
+): Promise<StoredReportSubmission[]> {
+  await ensureReportSubmissionTable();
+
+  return prisma.reportSubmission.findMany({
+    where: {
+      tournamentInstanceId,
+      teamId,
+      ...(cycleNumber === undefined ? {} : { cycleNumber }),
+    },
     orderBy: { submittedAt: "desc" },
   });
 }
@@ -173,7 +232,7 @@ export async function getReportSubmissionById(
 
 export async function updateReportSubmissionStatus(
   id: number,
-  status: "approved" | "rejected",
+  status: "reviewed" | "dismissed",
   db: PrismaDbClient = prisma
 ): Promise<void> {
   await ensureReportSubmissionTable();

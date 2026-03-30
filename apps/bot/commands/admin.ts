@@ -1,11 +1,11 @@
 import { ChatInputCommandInteraction, SlashCommandBuilder } from "discord.js";
 import { BotCommand } from "./types";
-import { buildTournamentInstancePicker, buildTournamentPanel } from "../helpers/tournamentPanel";
+import { buildAdminInstancePicker, buildAdminPanel } from "../helpers/adminPanel";
 
-export const tournamentCommand: BotCommand = {
+export const adminCommand: BotCommand = {
   data: new SlashCommandBuilder()
-    .setName("tournament")
-    .setDescription("Shows an instance-scoped tournament control panel")
+    .setName("admin")
+    .setDescription("Founder-only panel for tournament instance management")
     .addIntegerOption((option) =>
       option
         .setName("instance")
@@ -25,8 +25,7 @@ export const tournamentCommand: BotCommand = {
     const instanceId = interaction.options.getInteger("instance");
 
     if (instanceId === null) {
-      const picker = await buildTournamentInstancePicker(interaction.guildId);
-
+      const picker = await buildAdminInstancePicker(interaction.guildId);
       await interaction.reply({
         ...picker,
         ephemeral: true,
@@ -34,13 +33,9 @@ export const tournamentCommand: BotCommand = {
       return;
     }
 
-    const tournamentPanel = await buildTournamentPanel(
-      instanceId,
-      interaction.guildId
-    );
-
+    const panel = await buildAdminPanel(interaction.guildId, instanceId);
     await interaction.reply({
-      ...tournamentPanel,
+      ...panel,
       ephemeral: true,
     });
   },

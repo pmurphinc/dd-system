@@ -1,9 +1,11 @@
-import { getDefaultDevelopmentTeams } from "../mocks/teamData";
-import { StoredReportSubmission } from "./reportSubmissions";
 import { PrismaDbClient, prisma } from "./prisma";
+import { listImportedTeams, listImportedTeamsForTournamentInstance } from "./teams";
 
 export interface StoredStanding {
   id: number;
+  tournamentInstanceId: number | null;
+  teamId: number | null;
+  tournamentInstanceName?: string;
   teamName: string;
   frp: number;
   updatedAt: Date;
@@ -42,80 +44,162 @@ async function ensureStandingsTable(): Promise<void> {
 }
 
 async function ensureStandingsSeedData(
+  tournamentInstanceId?: number,
   db: PrismaDbClient = prisma
 ): Promise<void> {
   await ensureStandingsTable();
 
-  const standingsCount = await db.standing.count();
-
-  if (standingsCount > 0) {
-    return;
-  }
-
+  const activeTeams =
+    tournamentInstanceId === undefined
+      ? await listImportedTeams()
+      : await listImportedTeamsForTournamentInstance(tournamentInstanceId);
   const now = new Date();
-  await db.standing.createMany({
-    data: getDefaultDevelopmentTeams().map((teamData) => ({
-      teamName: teamData.teamName,
-      frp: 0,
-      updatedAt: now,
-    })),
-  });
+
+  for (const team of activeTeams) {
+    const existing = await db.standing.findFirst({
+      where: {
+        tournamentInstanceId: team.tournamentInstanceId ?? -1,
+        teamId: team.id,
+      },
+    });
+
+    if (!existing && team.tournamentInstanceId !== null) {
+      await db.standing.create({
+        data: {
+          tournamentInstanceId: team.tournamentInstanceId,
+          teamId: team.id,
+          teamName: team.teamName,
+          frp: 0,
+          updatedAt: now,
+        },
+      });
+    }
+  }
 }
 
-async function incrementTeamFrp(
+async function setTeamFrp(
+  tournamentInstanceId: number,
+  teamId: number,
   teamName: string,
-  frpDelta: number,
+  frpValue: number,
   db: PrismaDbClient = prisma
 ): Promise<void> {
   const now = new Date();
   const standing = await db.standing.findFirst({
-    where: { teamName },
+    where: {
+      tournamentInstanceId,
+      teamId,
+    },
   });
 
   if (!standing) {
     await db.standing.create({
       data: {
-        teamName,
-        frp: frpDelta,
-        updatedAt: now,
-      },
-    });
+          tournamentInstanceId,
+          teamId,
+          teamName,
+          frp: frpValue,
+          updatedAt: now,
+        },
+      });
     return;
   }
 
   await db.standing.update({
     where: { id: standing.id },
     data: {
-      frp: standing.frp + frpDelta,
+      frp: frpValue,
       updatedAt: now,
     },
   });
 }
 
-export async function applyApprovedReportToStandings(
-  reportSubmission: StoredReportSubmission,
+export async function recomputeStandingsForTournamentInstance(
+  tournamentInstanceId: number,
   db: PrismaDbClient = prisma
 ): Promise<void> {
-  await ensureStandingsSeedData(db);
+  await ensureStandingsSeedData(tournamentInstanceId, db);
+  const teams = await listImportedTeamsForTournamentInstance(tournamentInstanceId);
+  const totals = new Map<number, { teamName: string; frp: number }>();
 
-  const frpAward = getFrpAwardByScore(reportSubmission.score);
-
-  if (!frpAward) {
-    return;
+  for (const team of teams) {
+    totals.set(team.id, {
+      teamName: team.teamName,
+      frp: 0,
+    });
   }
 
-  await incrementTeamFrp(reportSubmission.teamName, frpAward.reportingTeam, db);
-  await incrementTeamFrp(
-    reportSubmission.opponentTeamName,
-    frpAward.opponentTeam,
-    db
-  );
+  const officialResults = await db.officialMatchResult.findMany({
+    where: {
+      tournamentInstanceId,
+      status: "active",
+    },
+  });
+
+  for (const result of officialResults) {
+    const teamTotals = totals.get(result.teamId);
+    const opponentTotals = totals.get(result.opponentTeamId);
+
+    if (teamTotals) {
+      teamTotals.frp += result.frpAwardedToTeam;
+    }
+
+    if (opponentTotals) {
+      opponentTotals.frp += result.frpAwardedToOpponent;
+    }
+  }
+
+  for (const [teamId, entry] of totals.entries()) {
+    await setTeamFrp(
+      tournamentInstanceId,
+      teamId,
+      entry.teamName,
+      entry.frp,
+      db
+    );
+  }
 }
 
 export async function getStandings(): Promise<StoredStanding[]> {
   await ensureStandingsSeedData();
-
-  return prisma.standing.findMany({
+  const standings = await prisma.standing.findMany({
+    include: {
+      tournamentInstance: true,
+    },
     orderBy: [{ frp: "desc" }, { teamName: "asc" }],
   });
+
+  return standings.map((standing) => ({
+    id: standing.id,
+    tournamentInstanceId: standing.tournamentInstanceId,
+    teamId: standing.teamId,
+    tournamentInstanceName: standing.tournamentInstance?.name ?? "Unassigned",
+    teamName: standing.teamName,
+    frp: standing.frp,
+    updatedAt: standing.updatedAt,
+  }));
+}
+
+export async function getStandingsForTournamentInstance(
+  tournamentInstanceId: number
+): Promise<StoredStanding[]> {
+  await ensureStandingsSeedData(tournamentInstanceId);
+
+  const standings = await prisma.standing.findMany({
+    where: { tournamentInstanceId },
+    include: {
+      tournamentInstance: true,
+    },
+    orderBy: [{ frp: "desc" }, { teamName: "asc" }],
+  });
+
+  return standings.map((standing) => ({
+    id: standing.id,
+    tournamentInstanceId: standing.tournamentInstanceId,
+    teamId: standing.teamId,
+    tournamentInstanceName: standing.tournamentInstance?.name ?? "Unassigned",
+    teamName: standing.teamName,
+    frp: standing.frp,
+    updatedAt: standing.updatedAt,
+  }));
 }

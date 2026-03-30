@@ -44,4 +44,4 @@ We will build those one piece at a time.
 - VS Code
 - GitHub Desktop (optional)
 - Discord Developer Portal account
-Bot Token - MTQ4NDI4MDY0NDc5MDkxMTI1OA.GF4i-x.NJtrinZBJBUYakpc_mNJEbMIqzC6RrXX2ihNT8
+

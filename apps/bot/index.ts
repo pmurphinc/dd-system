@@ -26,19 +26,19 @@ import { matchCommand } from "./commands/match";
 import { helpCommand } from "./commands/help";
 import { statusCommand } from "./commands/status";
 import { tournamentCommand } from "./commands/tournament";
+import { adminCommand } from "./commands/admin";
 import { checkinCommand } from "./commands/checkin";
-import { advancemockCommand } from "./commands/advancemock";
-import { resetmockCommand } from "./commands/resetmock";
 import { reviewCommand } from "./commands/review";
 import { reportCommand } from "./commands/report";
 import { reportsCommand } from "./commands/reports";
 import { standingsCommand } from "./commands/standings";
 import { cycleresultsCommand } from "./commands/cycleresults";
-import { cycleresultauditCommand } from "./commands/cycleresultaudit";
+import { syncstatusCommand } from "./commands/syncstatus";
 import { handleButtonInteraction } from "./handlers/buttonHandler";
 import { handleCommandInteraction } from "./handlers/commandHandler";
 import { handleModalInteraction } from "./handlers/modalHandler";
 import { handleSelectMenuInteraction } from "./handlers/selectMenuHandler";
+import { startRegistrationSheetSyncPolling } from "./services/registrationSheetSync";
 const commandList = [
   pingCommand,
   registerCommand,
@@ -47,15 +47,14 @@ const commandList = [
   helpCommand,
   statusCommand,
   tournamentCommand,
+  adminCommand,
   checkinCommand,
-  advancemockCommand,
-  resetmockCommand,
   reviewCommand,
   reportCommand,
   reportsCommand,
   standingsCommand,
   cycleresultsCommand,
-  cycleresultauditCommand,
+  syncstatusCommand,
 ];
 
 const commands = commandList.map((cmd) => cmd.data.toJSON());
@@ -84,6 +83,7 @@ async function registerCommands() {
 client.once("ready", async () => {
   console.log(`Bot is online as ${client.user?.tag}`);
   await registerCommands();
+  startRegistrationSheetSyncPolling();
 });
 
 client.on("interactionCreate", async (interaction) => {

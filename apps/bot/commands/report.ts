@@ -4,26 +4,26 @@ import {
 } from "discord.js";
 import { BotCommand } from "./types";
 import { buildReportPanel } from "../helpers/reportPanel";
-import { isFinalRoundReportingOpen } from "../helpers/tournamentAccess";
-import { getMockTournamentState } from "../mocks/tournamentState";
 
 export const reportCommand: BotCommand = {
   data: new SlashCommandBuilder()
     .setName("report")
-    .setDescription("Report a match result"),
+    .setDescription("Submit an informational Final Round result as team leader"),
 
   async execute(interaction: ChatInputCommandInteraction) {
-    const tournamentState = await getMockTournamentState();
-
-    if (!isFinalRoundReportingOpen(tournamentState)) {
+    if (!interaction.inCachedGuild()) {
       await interaction.reply({
-        content: "Result reporting is only available during Final Round.",
+        content: "This command must be used inside the guild.",
         ephemeral: true,
       });
       return;
     }
 
-    const reportPanel = await buildReportPanel(interaction.user.id);
+    const reportPanel = await buildReportPanel(
+      interaction.user.id,
+      interaction.guildId,
+      interaction.inCachedGuild() ? interaction.member.roles : undefined
+    );
 
     await interaction.reply({
       ...reportPanel,

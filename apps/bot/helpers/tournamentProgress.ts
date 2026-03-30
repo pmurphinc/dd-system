@@ -1,6 +1,6 @@
 import { getCycleCompletionStatus } from "./cycleCompletion";
 import { getMatchAssignmentsForCycle } from "../mocks/reportAssignment";
-import { MockTournamentState } from "../mocks/tournamentState";
+import { TournamentStateSnapshot } from "../mocks/tournamentState";
 import { getCycleResultsForCycle } from "../storage/cycleResults";
 
 export interface TournamentProgressSummary {
@@ -13,7 +13,7 @@ function formatMissingAssignmentsLabel(assignmentIds: number[]): string {
 }
 
 export async function getTournamentProgressSummary(
-  tournamentState: MockTournamentState
+  tournamentState: TournamentStateSnapshot
 ): Promise<TournamentProgressSummary> {
   if (tournamentState.tournamentStatus === "Completed") {
     return {

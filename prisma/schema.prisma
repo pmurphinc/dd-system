@@ -6,6 +6,42 @@ datasource db {
   provider = "sqlite"
 }
 
+enum TournamentInstanceStatus {
+  REGISTRATION_READY
+  CHECKIN_OPEN
+  CHECKIN_LOCKED
+  CYCLE_1_CASHOUT_READY
+  CYCLE_1_FINAL_ROUND_READY
+  CYCLE_1_COMPLETE
+  CYCLE_2_CASHOUT_READY
+  CYCLE_2_FINAL_ROUND_READY
+  CYCLE_2_COMPLETE
+  CYCLE_3_CASHOUT_READY
+  CYCLE_3_FINAL_ROUND_READY
+  CYCLE_3_COMPLETE
+  TIEBREAKER_READY
+  COMPLETED
+}
+
+enum TournamentStage {
+  REGISTRATION
+  CHECKIN
+  CASHOUT
+  FINAL_ROUND
+  COMPLETE
+}
+
+enum InformationalReportStatus {
+  pending
+  reviewed
+  dismissed
+}
+
+enum OfficialMatchResultStatus {
+  active
+  voided
+}
+
 model TournamentState {
   id               Int    @id
   tournamentStatus String
@@ -14,6 +50,43 @@ model TournamentState {
   checkedInTeams   Int
   totalTeams       Int
   activeMatch      String
+}
+
+model RegistrationSubmission {
+  id                    Int                  @id @default(autoincrement())
+  teamName              String
+  leaderDiscordUserId   String
+  leaderDisplayName     String
+  discordCommunity      String?
+  sourceLabel           String?
+  sourceSpreadsheetId   String?
+  sourceWorksheetTitle  String?
+  sourceRowKey          String?              @unique
+  sourceRowNumber       Int?
+  originalSubmittedAt   DateTime?
+  mapBan                String?
+  syncImportedAt        DateTime?
+  reviewStatus          String
+  reviewerNotes         String
+  submittedNotes        String
+  importedTeamId        Int?
+  createdByDiscordUserId String
+  createdByDisplayName  String
+  createdAt             DateTime
+  updatedAt             DateTime
+  players               RegistrationPlayer[]
+}
+
+model RegistrationPlayer {
+  id            Int                    @id @default(autoincrement())
+  submissionId  Int
+  displayName   String
+  discordUserId String?
+  embarkId      String
+  screenshotLink String
+  isLeader      Boolean                @default(false)
+  sortOrder     Int
+  submission    RegistrationSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
 }
 
 model ReviewState {
@@ -27,25 +100,54 @@ model ReviewState {
 }
 
 model Team {
-  id             Int    @id
+  id                     Int          @id @default(autoincrement())
   teamName       String
   captainName    String
   playerNames    String
   substituteName String
+  discordCommunity       String?
   approvalStatus String
   checkInStatus  String
+  leaderDiscordUserId    String       @default("")
+  discordRoleId          String?
+  voiceChannelId         String?
+  importedFromSubmissionId Int?       @unique
+  isPlacedInEvent        Boolean      @default(false)
+  tournamentInstanceId   Int?
+  members                TeamMember[]
+  tournamentInstance     TournamentInstance? @relation(fields: [tournamentInstanceId], references: [id], onDelete: SetNull)
+  standings              Standing[]
+}
+
+model TeamMember {
+  id            Int    @id @default(autoincrement())
+  teamId        Int
+  displayName   String
+  discordUserId String?
+  embarkId      String?
+  isLeader      Boolean @default(false)
+  sortOrder     Int
+  team          Team    @relation(fields: [teamId], references: [id], onDelete: Cascade)
 }
 
 model MatchAssignment {
-  id               Int    @id
+  id               Int    @id @default(autoincrement())
+  tournamentInstanceId Int?
+  teamId           Int?
+  opponentTeamId   Int?
   teamName         String
   opponentTeamName String
   cycleNumber      Int
   stageName        String
+  bracketLabel     String?
+  tournamentInstance TournamentInstance? @relation(fields: [tournamentInstanceId], references: [id], onDelete: Cascade)
+  officialMatchResult OfficialMatchResult?
 }
 
 model ReportSubmission {
   id               Int      @id @default(autoincrement())
+  tournamentInstanceId Int?
+  teamId           Int?
   score            String
   matchAssignmentId Int
   submittedByDiscordUserId String
@@ -55,15 +157,22 @@ model ReportSubmission {
   cycleNumber      Int
   stageName        String
   notes            String
-  status           String
+  status           InformationalReportStatus
   submittedAt      DateTime
+  tournamentInstance TournamentInstance? @relation(fields: [tournamentInstanceId], references: [id], onDelete: Cascade)
 }
 
 model Standing {
   id        Int      @id @default(autoincrement())
+  tournamentInstanceId Int?
+  teamId    Int?
   teamName  String
   frp       Int
   updatedAt DateTime
+  tournamentInstance TournamentInstance? @relation(fields: [tournamentInstanceId], references: [id], onDelete: Cascade)
+  team      Team?      @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  @@unique([tournamentInstanceId, teamId])
 }
 
 model CycleResult {
@@ -77,4 +186,128 @@ model CycleResult {
   frpAwardedToTeam    Int
   frpAwardedToOpponent Int
   recordedAt          DateTime
+}
+
+model GuildConfig {
+  guildId             String   @id
+  teamVoiceCategoryId String?
+  teamLeaderRoleId    String?
+  playerRoleId        String?
+  adminRoleId         String?
+  founderRoleId       String?
+  updatedAt           DateTime
+}
+
+model AuditLog {
+  id                Int      @id @default(autoincrement())
+  guildId           String?
+  action            String
+  entityType        String
+  entityId          String
+  summary           String
+  details           String
+  actorDiscordUserId String
+  createdAt         DateTime
+}
+
+model RegistrationSyncSourceState {
+  sourceKey              String   @id
+  sourceLabel            String
+  spreadsheetId          String
+  worksheetTitle         String?
+  lastResolvedRange      String?
+  enabled                Boolean
+  lastCheckedAt          DateTime?
+  lastSuccessfulSyncAt   DateTime?
+  lastImportedCount      Int
+  lastDuplicateCount     Int
+  lastInvalidCount       Int
+  totalImportedCount     Int
+  totalDuplicateCount    Int
+  totalInvalidCount      Int
+  lastError              String?
+  updatedAt              DateTime
+}
+
+model RegistrationSyncIssue {
+  id             Int      @id @default(autoincrement())
+  sourceKey      String
+  sourceLabel    String
+  spreadsheetId  String
+  worksheetTitle String?
+  rowKey         String   @unique
+  rowNumber      Int
+  rawTeamName    String?
+  reason         String
+  createdAt      DateTime
+  updatedAt      DateTime
+}
+
+model TournamentInstance {
+  id            Int                      @id @default(autoincrement())
+  guildId       String
+  name          String
+  orgKey        String
+  orgName       String?
+  displayName   String?
+  internalKey   String?
+  podNumber     Int?
+  status        TournamentInstanceStatus
+  currentCycle  Int?
+  currentStage  TournamentStage
+  maxTeams      Int                      @default(4)
+  isLocked      Boolean                  @default(false)
+  winningTeamId Int?
+  createdAt     DateTime
+  updatedAt     DateTime
+  teams         Team[]
+  matchAssignments MatchAssignment[]
+  reportSubmissions ReportSubmission[]
+  officialMatchResults OfficialMatchResult[]
+  standings     Standing[]
+  cashoutPlacements CashoutPlacement[]
+
+  @@unique([guildId, name])
+  @@unique([guildId, internalKey])
+}
+
+model CashoutPlacement {
+  id                   Int                @id @default(autoincrement())
+  tournamentInstanceId Int
+  cycleNumber          Int
+  firstPlaceTeamId     Int
+  secondPlaceTeamId    Int
+  thirdPlaceTeamId     Int
+  fourthPlaceTeamId    Int
+  createdAt            DateTime
+  updatedAt            DateTime
+  tournamentInstance   TournamentInstance @relation(fields: [tournamentInstanceId], references: [id], onDelete: Cascade)
+
+  @@unique([tournamentInstanceId, cycleNumber])
+}
+
+model OfficialMatchResult {
+  id                   Int                       @id @default(autoincrement())
+  tournamentInstanceId Int
+  matchAssignmentId    Int                       @unique
+  cycleNumber          Int
+  teamId               Int
+  opponentTeamId       Int
+  round1WinnerTeamId   Int
+  round2WinnerTeamId   Int
+  round3Played         Boolean
+  round3WinnerTeamId   Int?
+  teamScore            Int
+  opponentScore        Int
+  winnerTeamId         Int
+  loserTeamId          Int
+  score                String
+  frpAwardedToTeam     Int
+  frpAwardedToOpponent Int
+  enteredByDiscordUserId String
+  status               OfficialMatchResultStatus
+  createdAt            DateTime
+  updatedAt            DateTime
+  tournamentInstance   TournamentInstance @relation(fields: [tournamentInstanceId], references: [id], onDelete: Cascade)
+  matchAssignment      MatchAssignment    @relation(fields: [matchAssignmentId], references: [id], onDelete: Cascade)
 }

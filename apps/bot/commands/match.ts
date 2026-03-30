@@ -11,7 +11,10 @@ export const matchCommand: BotCommand = {
     .setDescription("Shows the current match panel"),
 
   async execute(interaction: ChatInputCommandInteraction) {
-    const matchPanel = await buildMatchPanel(interaction.user.id);
+    const matchPanel = await buildMatchPanel(
+      interaction.user.id,
+      interaction.inCachedGuild() ? interaction.member.roles : undefined
+    );
 
     await interaction.reply({
       ...matchPanel,

@@ -3,24 +3,31 @@ import {
   ChatInputCommandInteraction,
 } from "discord.js";
 import { BotCommand } from "./types";
-import { hasAdminCommandAccess } from "../helpers/permissions";
-import { buildReviewPanel } from "../helpers/reviewPanel";
+import { buildReviewQueue } from "../helpers/reviewPanel";
 
 export const reviewCommand: BotCommand = {
   data: new SlashCommandBuilder()
     .setName("review")
-    .setDescription("Review registered teams (admin)"),
+    .setDescription("Review registered teams (admin)")
+    .addStringOption((option) =>
+      option
+        .setName("status")
+        .setDescription("Choose which review queue to open")
+        .addChoices(
+          { name: "Pending", value: "pending" },
+          { name: "Approved", value: "approved" },
+          { name: "Rejected", value: "rejected" }
+        )
+    ),
 
   async execute(interaction: ChatInputCommandInteraction) {
-    if (!hasAdminCommandAccess(interaction)) {
-      await interaction.reply({
-        content: "You do not have permission to use this command.",
-        ephemeral: true,
-      });
-      return;
-    }
-
-    const reviewPanel = await buildReviewPanel();
+    const statusFilter =
+      (interaction.options.getString("status") as
+        | "pending"
+        | "approved"
+        | "rejected"
+        | null) ?? "pending";
+    const reviewPanel = await buildReviewQueue(statusFilter);
 
     await interaction.reply({
       ...reviewPanel,

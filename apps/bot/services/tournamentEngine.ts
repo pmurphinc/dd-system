@@ -4,8 +4,8 @@ import {
 } from "../helpers/cycleCompletion";
 import { getMatchAssignmentsForCycle } from "../mocks/reportAssignment";
 import {
-  MockTournamentState,
-  setMockTournamentState,
+  TournamentStateSnapshot,
+  setTournamentState,
 } from "../mocks/tournamentState";
 import { getCycleResultsForCycle } from "../storage/cycleResults";
 import { PrismaDbClient, prisma } from "../storage/prisma";
@@ -23,21 +23,21 @@ interface FinalizeCycleOptions {
 }
 
 function buildNextCycleTournamentState(
-  tournamentState: MockTournamentState,
+  tournamentState: TournamentStateSnapshot,
   nextCycle: number
-): MockTournamentState {
+): TournamentStateSnapshot {
   return {
     ...tournamentState,
     tournamentStatus: "Live",
     currentCycle: nextCycle,
     currentStage: "Cashout",
-    activeMatch: "Team Alpha vs Team Bravo",
+    activeMatch: "Assignments pending",
   };
 }
 
 function buildCompletedTournamentState(
-  tournamentState: MockTournamentState
-): MockTournamentState {
+  tournamentState: TournamentStateSnapshot
+): TournamentStateSnapshot {
   return {
     ...tournamentState,
     tournamentStatus: "Completed",
@@ -48,7 +48,7 @@ function buildCompletedTournamentState(
 }
 
 export async function finalizeCycleIfComplete(
-  tournamentState: MockTournamentState,
+  tournamentState: TournamentStateSnapshot,
   options: FinalizeCycleOptions = {},
   db: PrismaDbClient = prisma
 ): Promise<CycleFinalizationResult> {
@@ -145,7 +145,7 @@ export async function finalizeCycleIfComplete(
   }
 
   if (cycle >= 3) {
-    await setMockTournamentState(buildCompletedTournamentState(tournamentState), db);
+    await setTournamentState(buildCompletedTournamentState(tournamentState), db);
 
     return {
       didFinalizeCycle: true,
@@ -155,7 +155,7 @@ export async function finalizeCycleIfComplete(
     };
   }
 
-  await setMockTournamentState(
+  await setTournamentState(
     buildNextCycleTournamentState(tournamentState, cycle + 1),
     db
   );

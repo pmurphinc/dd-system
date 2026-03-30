@@ -1,4 +1,4 @@
-import { MockReportAssignment } from "../mocks/reportAssignment";
+import { ReportAssignment } from "../mocks/reportAssignment";
 import { StoredCycleResult } from "../storage/cycleResults";
 
 const FINAL_ROUND_STAGE_NAME = "Final Round";
@@ -14,7 +14,7 @@ export interface CycleCompletionStatus {
 
 export function getCycleCompletionStatus(
   cycle: number,
-  assignments: MockReportAssignment[],
+  assignments: ReportAssignment[],
   cycleResults: StoredCycleResult[]
 ): CycleCompletionStatus {
   // Stage 2 is currently represented by Final Round assignments for the cycle.
@@ -76,7 +76,7 @@ export function getCycleCompletionStatus(
 
 export function isCycleComplete(
   cycle: number,
-  assignments: MockReportAssignment[],
+  assignments: ReportAssignment[],
   cycleResults: StoredCycleResult[]
 ): boolean {
   return getCycleCompletionStatus(cycle, assignments, cycleResults).isComplete;

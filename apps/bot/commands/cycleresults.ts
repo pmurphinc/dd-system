@@ -4,7 +4,6 @@ import {
   SlashCommandBuilder,
 } from "discord.js";
 import { BotCommand } from "./types";
-import { hasAdminCommandAccess } from "../helpers/permissions";
 import { getRecentCycleResults } from "../storage/cycleResults";
 
 export const cycleresultsCommand: BotCommand = {
@@ -13,14 +12,6 @@ export const cycleresultsCommand: BotCommand = {
     .setDescription("Shows recent recorded cycle results"),
 
   async execute(interaction: ChatInputCommandInteraction) {
-    if (!hasAdminCommandAccess(interaction)) {
-      await interaction.reply({
-        content: "You do not have permission to use this command.",
-        ephemeral: true,
-      });
-      return;
-    }
-
     const cycleResults = await getRecentCycleResults(5);
 
     const embed = new EmbedBuilder()

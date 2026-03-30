@@ -3,47 +3,63 @@ import {
   ButtonBuilder,
   ButtonStyle,
   EmbedBuilder,
+  GuildMemberRoleManager,
 } from "discord.js";
-import { getMockReportAssignment } from "../mocks/reportAssignment";
+import { getCurrentFinalRoundAssignmentForTeam } from "../storage/matchAssignments";
+import { getTeamForUser } from "../storage/teams";
+import { getTournamentInstanceById, syncTournamentInstancesForGuild } from "../storage/tournamentInstances";
 
-export async function buildReportPanel(userId: string) {
-  const assignment = await getMockReportAssignment(userId);
+export async function buildReportPanel(
+  userId: string,
+  guildId: string,
+  memberRoles?: GuildMemberRoleManager
+) {
+  await syncTournamentInstancesForGuild(guildId);
+  const team = await getTeamForUser(userId, memberRoles);
+  const instance =
+    team?.tournamentInstanceId !== null && team
+      ? await getTournamentInstanceById(team.tournamentInstanceId)
+      : null;
+  const assignment =
+    team && instance
+      ? await getCurrentFinalRoundAssignmentForTeam(
+          instance.id,
+          team.id,
+          instance.currentCycle
+        )
+      : null;
 
   const embed = new EmbedBuilder()
     .setTitle("Development Division Result Report")
-    .setDescription("This is the placeholder result reporting panel.")
+    .setDescription(
+      assignment
+        ? "Team leader informational Final Round report."
+        : "No Final Round assignment is available for your team."
+    )
     .addFields(
-      { name: "Assigned Team", value: assignment.teamName, inline: true },
-      {
-        name: "Opponent",
-        value: assignment.opponentTeamName,
-        inline: true,
-      },
-      { name: "Cycle", value: `${assignment.cycleNumber}`, inline: true },
-      { name: "Stage", value: assignment.stageName, inline: true }
+      { name: "Tournament Instance", value: instance?.name ?? "Not assigned", inline: true },
+      { name: "Assigned Team", value: team?.teamName ?? "No team linked", inline: true },
+      { name: "Opponent", value: assignment?.opponentTeamName ?? "Not assigned", inline: true },
+      { name: "Cycle", value: `${instance?.currentCycle ?? "-"}`, inline: true },
+      { name: "Stage", value: instance?.currentStage ?? "REGISTRATION", inline: true },
+      { name: "Submission Type", value: "Informational only", inline: true }
     );
 
-  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder()
-      .setCustomId("report_2_0")
-      .setLabel("2-0")
-      .setStyle(ButtonStyle.Primary),
-    new ButtonBuilder()
-      .setCustomId("report_2_1")
-      .setLabel("2-1")
-      .setStyle(ButtonStyle.Primary),
-    new ButtonBuilder()
-      .setCustomId("report_1_2")
-      .setLabel("1-2")
-      .setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder()
-      .setCustomId("report_0_2")
-      .setLabel("0-2")
-      .setStyle(ButtonStyle.Secondary)
-  );
+  const components =
+    team && instance
+      ? [
+          new ActionRowBuilder<ButtonBuilder>().addComponents(
+            new ButtonBuilder()
+              .setCustomId(`team:report:${instance.id}:${team.id}`)
+              .setLabel("Submit Final Report")
+              .setStyle(ButtonStyle.Primary)
+              .setDisabled(!assignment)
+          ),
+        ]
+      : [];
 
   return {
     embeds: [embed],
-    components: [row],
+    components,
   };
 }

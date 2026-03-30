@@ -21,7 +21,7 @@ export const standingsCommand: BotCommand = {
           ? standings
               .map(
                 (standing, index) =>
-                  `${index + 1}. ${standing.teamName} - ${standing.frp} FRP`
+                  `${index + 1}. ${standing.teamName} (${standing.tournamentInstanceName ?? "Unassigned"}) - ${standing.frp} FRP`
               )
               .join("\n")
           : "No standings available."

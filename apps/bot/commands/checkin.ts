@@ -3,30 +3,31 @@ import {
   ChatInputCommandInteraction,
 } from "discord.js";
 import { BotCommand } from "./types";
-import { buildCheckinPanel } from "../helpers/checkinPanel";
-import { isCheckInOpen } from "../helpers/tournamentAccess";
-import { getMockTournamentState } from "../mocks/tournamentState";
+import { buildTeamPanel } from "../helpers/teamPanel";
 
 export const checkinCommand: BotCommand = {
   data: new SlashCommandBuilder()
     .setName("checkin")
-    .setDescription("Check in your team for the event"),
+    .setDescription("Open your team panel and use the instance-scoped check-in flow"),
 
   async execute(interaction: ChatInputCommandInteraction) {
-    const tournamentState = await getMockTournamentState();
-
-    if (!isCheckInOpen(tournamentState)) {
+    if (!interaction.inCachedGuild()) {
       await interaction.reply({
-        content: "Check-in is not open right now.",
+        content: "This command must be used inside the guild.",
         ephemeral: true,
       });
       return;
     }
 
-    const checkinPanel = await buildCheckinPanel();
+    const teamPanel = await buildTeamPanel(
+      interaction.user.id,
+      interaction.guildId,
+      interaction.member.roles
+    );
 
     await interaction.reply({
-      ...checkinPanel,
+      content: "Check-in now runs through `/team`. Use the panel below.",
+      ...teamPanel,
       ephemeral: true,
     });
   },

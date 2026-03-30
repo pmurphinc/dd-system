@@ -3,18 +3,22 @@ import {
   ButtonBuilder,
   ButtonStyle,
   EmbedBuilder,
+  GuildMemberRoleManager,
 } from "discord.js";
 import { isFinalRoundReportingOpen } from "./tournamentAccess";
-import { getMockReportAssignment } from "../mocks/reportAssignment";
-import { getMockTournamentState } from "../mocks/tournamentState";
+import { getReportAssignment } from "../mocks/reportAssignment";
+import { getTournamentState } from "../mocks/tournamentState";
 
-export async function buildMatchPanel(userId: string) {
-  const assignment = await getMockReportAssignment(userId);
-  const tournamentState = await getMockTournamentState();
+export async function buildMatchPanel(
+  userId: string,
+  memberRoles?: GuildMemberRoleManager
+) {
+  const assignment = await getReportAssignment(userId, memberRoles);
+  const tournamentState = await getTournamentState();
 
   const embed = new EmbedBuilder()
     .setTitle("Development Division Match Panel")
-    .setDescription("Mock match panel for development")
+    .setDescription("Current assignment and reporting status for your team.")
     .addFields(
       { name: "Assigned Team", value: assignment.teamName, inline: true },
       { name: "Opponent", value: assignment.opponentTeamName, inline: true },

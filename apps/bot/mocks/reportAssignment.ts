@@ -1,4 +1,9 @@
-export interface MockReportAssignment {
+import { GuildMemberRoleManager } from "discord.js";
+import { PrismaDbClient, prisma } from "../storage/prisma";
+import { getTeamForUser } from "../storage/teams";
+import { getTournamentState, updateTournamentActiveMatch } from "./tournamentState";
+
+export interface ReportAssignment {
   id: number;
   teamName: string;
   opponentTeamName: string;
@@ -6,45 +11,20 @@ export interface MockReportAssignment {
   stageName: string;
 }
 
-interface TournamentAssignmentSyncState {
-  currentCycle: number | null;
-  currentStage: string;
-}
-
-import { PrismaDbClient, prisma } from "../storage/prisma";
-import { getActiveDevTeamName } from "../helpers/devSelection";
-
-const defaultAssignments: MockReportAssignment[] = [
-  {
-    id: 1,
-    teamName: "Development Division Alpha",
-    opponentTeamName: "Development Division Bravo",
-    cycleNumber: 1,
-    stageName: "Swiss Stage",
-  },
-  {
-    id: 2,
-    teamName: "Development Division Charlie",
-    opponentTeamName: "Development Division Delta",
-    cycleNumber: 1,
-    stageName: "Swiss Stage",
-  },
-];
-
 let matchAssignmentTableReady: Promise<void> | undefined;
 
 async function ensureMatchAssignmentTable(): Promise<void> {
-  matchAssignmentTableReady ??= prisma
-    .$executeRawUnsafe(`
+  matchAssignmentTableReady ??= Promise.resolve().then(async () => {
+    await prisma.$executeRawUnsafe(`
       CREATE TABLE IF NOT EXISTS "MatchAssignment" (
-        "id" INTEGER NOT NULL PRIMARY KEY,
+        "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
         "teamName" TEXT NOT NULL,
         "opponentTeamName" TEXT NOT NULL,
         "cycleNumber" INTEGER NOT NULL,
         "stageName" TEXT NOT NULL
       )
-    `)
-    .then(() => undefined);
+    `);
+  });
 
   await matchAssignmentTableReady;
 }
@@ -55,7 +35,7 @@ function mapMatchAssignment(record: {
   opponentTeamName: string;
   cycleNumber: number;
   stageName: string;
-}): MockReportAssignment {
+}): ReportAssignment {
   return {
     id: record.id,
     teamName: record.teamName,
@@ -65,108 +45,189 @@ function mapMatchAssignment(record: {
   };
 }
 
-async function ensureMatchAssignmentSeedData(
+async function listAssignmentsForStage(
+  cycleNumber: number,
+  stageName: string,
   db: PrismaDbClient = prisma
-): Promise<void> {
+): Promise<ReportAssignment[]> {
   await ensureMatchAssignmentTable();
 
-  const existingAssignmentsCount = await db.matchAssignment.count();
+  const rows = await db.matchAssignment.findMany({
+    where: {
+      cycleNumber,
+      stageName,
+    },
+    orderBy: [{ id: "asc" }],
+  });
 
-  if (existingAssignmentsCount > 0) {
-    return;
+  return rows.map(mapMatchAssignment);
+}
+
+export async function ensureAssignmentsForStage(
+  cycleNumber: number,
+  stageName: string,
+  pairs: Array<[string, string]>,
+  db: PrismaDbClient = prisma
+): Promise<ReportAssignment[]> {
+  await ensureMatchAssignmentTable();
+
+  const existing = await listAssignmentsForStage(cycleNumber, stageName, db);
+
+  if (existing.length > 0) {
+    return existing;
+  }
+
+  if (pairs.length === 0) {
+    return [];
   }
 
   await db.matchAssignment.createMany({
-    data: defaultAssignments,
+    data: pairs.map(([teamName, opponentTeamName]) => ({
+      teamName,
+      opponentTeamName,
+      cycleNumber,
+      stageName,
+    })),
   });
+
+  const created = await listAssignmentsForStage(cycleNumber, stageName, db);
+  await updateTournamentActiveMatch(
+    created.length > 0
+      ? created.map((assignment) => `${assignment.teamName} vs ${assignment.opponentTeamName}`).join("\n")
+      : "No active match"
+  );
+
+  return created;
 }
 
-async function getActiveMatchAssignmentRecord(db: PrismaDbClient = prisma) {
-  await ensureMatchAssignmentSeedData(db);
-
-  const activeTeamName = getActiveDevTeamName();
-  const record =
-    (await db.matchAssignment.findFirst({
-      where: { teamName: activeTeamName },
-    })) ??
-    (await db.matchAssignment.findFirst({
-      orderBy: { id: "asc" },
-    }));
-
-  if (!record) {
-    throw new Error("Failed to load development match assignment.");
-  }
-
-  return record;
-}
-
-async function getTournamentAssignmentSyncState(
+export async function replaceAssignmentsForStage(
+  cycleNumber: number,
+  stageName: string,
+  pairs: Array<[string, string]>,
   db: PrismaDbClient = prisma
-): Promise<TournamentAssignmentSyncState | null> {
-  const tournamentState = await db.tournamentState.findUnique({
-    where: { id: 1 },
-    select: {
-      currentCycle: true,
-      currentStage: true,
+): Promise<ReportAssignment[]> {
+  await ensureMatchAssignmentTable();
+
+  await db.matchAssignment.deleteMany({
+    where: {
+      cycleNumber,
+      stageName,
     },
   });
 
-  return tournamentState;
-}
-
-export async function syncActiveDevAssignmentToTournamentState(
-  tournamentState: TournamentAssignmentSyncState,
-  db: PrismaDbClient = prisma
-): Promise<MockReportAssignment> {
-  const activeAssignment = await getActiveMatchAssignmentRecord(db);
-  const nextCycleNumber = tournamentState.currentCycle ?? 0;
-
-  if (
-    activeAssignment.cycleNumber === nextCycleNumber &&
-    activeAssignment.stageName === tournamentState.currentStage
-  ) {
-    return mapMatchAssignment(activeAssignment);
+  if (pairs.length > 0) {
+    await db.matchAssignment.createMany({
+      data: pairs.map(([teamName, opponentTeamName]) => ({
+        teamName,
+        opponentTeamName,
+        cycleNumber,
+        stageName,
+      })),
+    });
   }
 
-  const updatedRecord = await db.matchAssignment.update({
-    where: { id: activeAssignment.id },
-    data: {
-      cycleNumber: nextCycleNumber,
+  const assignments = await listAssignmentsForStage(cycleNumber, stageName, db);
+  await updateTournamentActiveMatch(
+    assignments.length > 0
+      ? assignments
+          .map((assignment) => `${assignment.teamName} vs ${assignment.opponentTeamName}`)
+          .join("\n")
+      : "No active match"
+  );
+
+  return assignments;
+}
+
+export async function getReportAssignment(
+  reportingUserKey: string,
+  memberRoles?: GuildMemberRoleManager
+): Promise<ReportAssignment> {
+  await ensureMatchAssignmentTable();
+
+  const tournamentState = await getTournamentState();
+  const team = await getTeamForUser(reportingUserKey, memberRoles);
+
+  if (!team || tournamentState.currentCycle === null) {
+    return {
+      id: 0,
+      teamName: team?.teamName ?? "No team linked",
+      opponentTeamName: "No assignment",
+      cycleNumber: tournamentState.currentCycle ?? 0,
       stageName: tournamentState.currentStage,
-    },
-  });
-
-  return mapMatchAssignment(updatedRecord);
-}
-
-async function ensureMatchAssignment(): Promise<MockReportAssignment> {
-  const tournamentState = await getTournamentAssignmentSyncState();
-
-  if (tournamentState) {
-    return syncActiveDevAssignmentToTournamentState(tournamentState);
+    };
   }
 
-  const record = await getActiveMatchAssignmentRecord();
+  const assignment = await prisma.matchAssignment.findFirst({
+    where: {
+      cycleNumber: tournamentState.currentCycle,
+      stageName: tournamentState.currentStage,
+      OR: [
+        { teamName: team.teamName },
+        { opponentTeamName: team.teamName },
+      ],
+    },
+    orderBy: { id: "asc" },
+  });
 
-  return mapMatchAssignment(record);
-}
+  if (!assignment) {
+    return {
+      id: 0,
+      teamName: team.teamName,
+      opponentTeamName: "No assignment",
+      cycleNumber: tournamentState.currentCycle,
+      stageName: tournamentState.currentStage,
+    };
+  }
 
-export async function getMockReportAssignment(
-  _reportingUserKey: string
-): Promise<MockReportAssignment> {
-  return ensureMatchAssignment();
+  return assignment.teamName === team.teamName
+    ? mapMatchAssignment(assignment)
+    : {
+        id: assignment.id,
+        teamName: team.teamName,
+        opponentTeamName: assignment.teamName,
+        cycleNumber: assignment.cycleNumber,
+        stageName: assignment.stageName,
+      };
 }
 
 export async function getMatchAssignmentsForCycle(
   cycle: number,
   db: PrismaDbClient = prisma
-): Promise<MockReportAssignment[]> {
-  await ensureMatchAssignmentSeedData(db);
+): Promise<ReportAssignment[]> {
+  await ensureMatchAssignmentTable();
 
-  const records = await db.matchAssignment.findMany({
+  const rows = await db.matchAssignment.findMany({
     where: { cycleNumber: cycle },
-    orderBy: { id: "asc" },
+    orderBy: [{ stageName: "asc" }, { id: "asc" }],
   });
 
-  return records.map(mapMatchAssignment);
+  return rows.map(mapMatchAssignment);
 }
+
+export async function getMatchAssignmentsForCurrentStage(): Promise<ReportAssignment[]> {
+  const tournamentState = await getTournamentState();
+
+  if (tournamentState.currentCycle === null) {
+    return [];
+  }
+
+  return listAssignmentsForStage(
+    tournamentState.currentCycle,
+    tournamentState.currentStage
+  );
+}
+
+export async function getMatchAssignmentById(
+  id: number
+): Promise<ReportAssignment | null> {
+  await ensureMatchAssignmentTable();
+
+  const assignment = await prisma.matchAssignment.findUnique({
+    where: { id },
+  });
+
+  return assignment ? mapMatchAssignment(assignment) : null;
+}
+
+export type MockReportAssignment = ReportAssignment;
+export const getMockReportAssignment = getReportAssignment;

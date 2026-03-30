@@ -1,7 +1,9 @@
 import { PrismaDbClient, prisma } from "../storage/prisma";
-import { syncActiveDevAssignmentToTournamentState } from "./reportAssignment";
+import { getPlacedTeams } from "../storage/teams";
+import { createAuditLog } from "../storage/auditLog";
+import { ensureAssignmentsForStage } from "./reportAssignment";
 
-export interface MockTournamentState {
+export interface TournamentStateSnapshot {
   tournamentStatus: string;
   currentCycle: number | null;
   currentStage: string;
@@ -10,83 +12,13 @@ export interface MockTournamentState {
   activeMatch: string;
 }
 
-const tournamentProgression: MockTournamentState[] = [
-  {
-    tournamentStatus: "Registration Open",
-    currentCycle: 0,
-    currentStage: "Registration",
-    checkedInTeams: 0,
-    totalTeams: 4,
-    activeMatch: "No active match",
-  },
-  {
-    tournamentStatus: "Check-In Open",
-    currentCycle: 0,
-    currentStage: "Check-In",
-    checkedInTeams: 0,
-    totalTeams: 4,
-    activeMatch: "No active match",
-  },
-  {
-    tournamentStatus: "Live",
-    currentCycle: 1,
-    currentStage: "Cashout",
-    checkedInTeams: 0,
-    totalTeams: 4,
-    activeMatch: "Team Alpha vs Team Bravo",
-  },
-  {
-    tournamentStatus: "Live",
-    currentCycle: 1,
-    currentStage: "Final Round",
-    checkedInTeams: 0,
-    totalTeams: 4,
-    activeMatch: "Team Alpha vs Team Bravo",
-  },
-  {
-    tournamentStatus: "Live",
-    currentCycle: 2,
-    currentStage: "Cashout",
-    checkedInTeams: 0,
-    totalTeams: 4,
-    activeMatch: "Team Alpha vs Team Bravo",
-  },
-  {
-    tournamentStatus: "Live",
-    currentCycle: 2,
-    currentStage: "Final Round",
-    checkedInTeams: 0,
-    totalTeams: 4,
-    activeMatch: "Team Alpha vs Team Bravo",
-  },
-  {
-    tournamentStatus: "Live",
-    currentCycle: 3,
-    currentStage: "Cashout",
-    checkedInTeams: 0,
-    totalTeams: 4,
-    activeMatch: "Team Alpha vs Team Bravo",
-  },
-  {
-    tournamentStatus: "Live",
-    currentCycle: 3,
-    currentStage: "Final Round",
-    checkedInTeams: 0,
-    totalTeams: 4,
-    activeMatch: "Team Alpha vs Team Bravo",
-  },
-  {
-    tournamentStatus: "Completed",
-    currentCycle: 3,
-    currentStage: "Complete",
-    checkedInTeams: 0,
-    totalTeams: 4,
-    activeMatch: "No active match",
-  },
-];
-
-const defaultTournamentState: MockTournamentState = {
-  ...tournamentProgression[0],
+const defaultTournamentState: TournamentStateSnapshot = {
+  tournamentStatus: "Registration Open",
+  currentCycle: null,
+  currentStage: "Registration",
+  checkedInTeams: 0,
+  totalTeams: 0,
+  activeMatch: "No active match",
 };
 
 let tournamentStateTableReady: Promise<void> | undefined;
@@ -98,7 +30,7 @@ function mapTournamentState(record: {
   checkedInTeams: number;
   totalTeams: number;
   activeMatch: string;
-}): MockTournamentState {
+}): TournamentStateSnapshot {
   return {
     tournamentStatus: record.tournamentStatus,
     currentCycle: record.currentCycle,
@@ -129,7 +61,7 @@ async function ensureTournamentStateTable(): Promise<void> {
 
 async function ensureTournamentState(
   db: PrismaDbClient = prisma
-): Promise<MockTournamentState> {
+): Promise<TournamentStateSnapshot> {
   await ensureTournamentStateTable();
 
   const record = await db.tournamentState.upsert({
@@ -141,19 +73,48 @@ async function ensureTournamentState(
     },
   });
 
-  return mapTournamentState(record);
+  return syncTournamentTeamCounts(mapTournamentState(record), db);
 }
 
-export async function getMockTournamentState(
+export async function syncTournamentTeamCounts(
+  currentState?: TournamentStateSnapshot,
   db: PrismaDbClient = prisma
-): Promise<MockTournamentState> {
+): Promise<TournamentStateSnapshot> {
+  await ensureTournamentStateTable();
+
+  const placedTeams = await getPlacedTeams();
+  const checkedInTeams = placedTeams.filter(
+    (team) => team.checkInStatus === "Checked In"
+  ).length;
+  const baseState = currentState ?? (await ensureTournamentState(db));
+
+  const updated = await db.tournamentState.upsert({
+    where: { id: 1 },
+    update: {
+      checkedInTeams,
+      totalTeams: placedTeams.length,
+    },
+    create: {
+      id: 1,
+      ...baseState,
+      checkedInTeams,
+      totalTeams: placedTeams.length,
+    },
+  });
+
+  return mapTournamentState(updated);
+}
+
+export async function getTournamentState(
+  db: PrismaDbClient = prisma
+): Promise<TournamentStateSnapshot> {
   return ensureTournamentState(db);
 }
 
-export async function setMockTournamentState(
-  nextState: MockTournamentState,
+export async function setTournamentState(
+  nextState: TournamentStateSnapshot,
   db: PrismaDbClient = prisma
-): Promise<MockTournamentState> {
+): Promise<TournamentStateSnapshot> {
   await ensureTournamentStateTable();
 
   const updatedRecord = await db.tournamentState.upsert({
@@ -165,60 +126,129 @@ export async function setMockTournamentState(
     },
   });
 
-  const updatedState = mapTournamentState(updatedRecord);
-  await syncActiveDevAssignmentToTournamentState(updatedState, db);
-
-  return updatedState;
+  return syncTournamentTeamCounts(mapTournamentState(updatedRecord), db);
 }
 
-export async function incrementCheckedInTeams(): Promise<MockTournamentState> {
-  const currentState = await ensureTournamentState();
+export async function incrementCheckedInTeams(): Promise<TournamentStateSnapshot> {
+  return syncTournamentTeamCounts();
+}
 
-  if (currentState.checkedInTeams >= currentState.totalTeams) {
-    return currentState;
+function buildActiveMatchLabel(pairs: Array<[string, string]>): string {
+  if (pairs.length === 0) {
+    return "No active match";
   }
 
-  const updatedRecord = await prisma.tournamentState.update({
-    where: { id: 1 },
-    data: {
-      checkedInTeams: currentState.checkedInTeams + 1,
-    },
-  });
-
-  return mapTournamentState(updatedRecord);
+  return pairs.map(([teamName, opponentName]) => `${teamName} vs ${opponentName}`).join("\n");
 }
 
-export async function advanceMockTournamentState(): Promise<MockTournamentState> {
-  const currentState = await ensureTournamentState();
+export async function openCheckIn(actorDiscordUserId = "system"): Promise<TournamentStateSnapshot> {
+  const nextState = await setTournamentState({
+    tournamentStatus: "Check-In Open",
+    currentCycle: null,
+    currentStage: "Check-In",
+    checkedInTeams: 0,
+    totalTeams: 0,
+    activeMatch: "No active match",
+  });
 
-  const currentIndex = tournamentProgression.findIndex(
-    (state) =>
-      state.tournamentStatus === currentState.tournamentStatus &&
-      state.currentCycle === currentState.currentCycle &&
-      state.currentStage === currentState.currentStage
+  await createAuditLog({
+    action: "tournament_checkin_opened",
+    entityType: "tournament_state",
+    entityId: "1",
+    summary: "Opened check-in.",
+    actorDiscordUserId,
+  });
+
+  return nextState;
+}
+
+export async function startTournamentCycle(
+  actorDiscordUserId: string
+): Promise<TournamentStateSnapshot> {
+  const placedTeams = await getPlacedTeams();
+
+  if (placedTeams.length < 4) {
+    throw new Error("Four placed teams are required to start the event.");
+  }
+
+  const checkedInTeams = placedTeams.filter(
+    (team) => team.checkInStatus === "Checked In"
   );
 
-  const nextIndex =
-    currentIndex === -1
-      ? 0
-      : Math.min(currentIndex + 1, tournamentProgression.length - 1);
+  if (checkedInTeams.length < 4) {
+    throw new Error("Four checked-in teams are required to start the event.");
+  }
 
-  const nextState = tournamentProgression[nextIndex];
+  const pairs: Array<[string, string]> = [
+    [placedTeams[0].teamName, placedTeams[1].teamName],
+    [placedTeams[2].teamName, placedTeams[3].teamName],
+  ];
 
-  const updatedRecord = await prisma.tournamentState.update({
+  await ensureAssignmentsForStage(1, "Cashout", pairs);
+
+  const nextState = await setTournamentState({
+    tournamentStatus: "Live",
+    currentCycle: 1,
+    currentStage: "Cashout",
+    checkedInTeams: checkedInTeams.length,
+    totalTeams: placedTeams.length,
+    activeMatch: buildActiveMatchLabel(pairs),
+  });
+
+  await createAuditLog({
+    action: "tournament_cycle_started",
+    entityType: "tournament_state",
+    entityId: "1",
+    summary: "Started cycle 1 Cashout.",
+    details: nextState.activeMatch,
+    actorDiscordUserId,
+  });
+
+  return nextState;
+}
+
+export async function advanceTournamentState(): Promise<TournamentStateSnapshot> {
+  const currentState = await ensureTournamentState();
+
+  if (currentState.tournamentStatus === "Registration Open") {
+    return openCheckIn("system");
+  }
+
+  if (currentState.tournamentStatus === "Check-In Open") {
+    return startTournamentCycle("system");
+  }
+
+  return currentState;
+}
+
+export async function updateTournamentActiveMatch(
+  activeMatch: string
+): Promise<TournamentStateSnapshot> {
+  const currentState = await getTournamentState();
+
+  return setTournamentState({
+    ...currentState,
+    activeMatch,
+  });
+}
+
+export async function resetTournamentState(): Promise<TournamentStateSnapshot> {
+  await ensureTournamentStateTable();
+
+  const reset = await prisma.tournamentState.upsert({
     where: { id: 1 },
-    data: {
-      ...nextState,
-      checkedInTeams: Math.min(currentState.checkedInTeams, nextState.totalTeams),
+    update: defaultTournamentState,
+    create: {
+      id: 1,
+      ...defaultTournamentState,
     },
   });
 
-  const updatedState = mapTournamentState(updatedRecord);
-  await syncActiveDevAssignmentToTournamentState(updatedState);
-
-  return updatedState;
+  return mapTournamentState(reset);
 }
 
-export async function resetMockTournamentState(): Promise<MockTournamentState> {
-  return setMockTournamentState(defaultTournamentState);
-}
+export type MockTournamentState = TournamentStateSnapshot;
+export const getMockTournamentState = getTournamentState;
+export const setMockTournamentState = setTournamentState;
+export const advanceMockTournamentState = advanceTournamentState;
+export const resetMockTournamentState = resetTournamentState;

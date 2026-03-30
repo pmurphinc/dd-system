@@ -4,14 +4,14 @@ import {
   ButtonStyle,
   EmbedBuilder,
 } from "discord.js";
-import { getMockTournamentState } from "../mocks/tournamentState";
+import { getTournamentState } from "../mocks/tournamentState";
 
 export async function buildCheckinPanel() {
-  const tournamentState = await getMockTournamentState();
+  const tournamentState = await getTournamentState();
 
   const embed = new EmbedBuilder()
     .setTitle("Development Division Check-In")
-    .setDescription("Use the button below to update the mock team check-in state.")
+    .setDescription("Use the button below to update your team's event check-in state.")
     .addFields(
       {
         name: "Check-In Status",
