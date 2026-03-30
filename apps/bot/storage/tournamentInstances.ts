@@ -5,11 +5,9 @@ import {
 import { createAuditLog } from "./auditLog";
 import { prisma } from "./prisma";
 import {
-  assignTeamToTournamentInstance,
-  listImportedTeams,
   listImportedTeamsForTournamentInstance,
   setTeamCheckInStatus,
-  StoredTeam,
+  assignTeamToTournamentInstance,
 } from "./teams";
 
 export interface StoredTournamentInstance {
@@ -41,28 +39,6 @@ function normalizeInstance(record: StoredTournamentInstance): StoredTournamentIn
 
 function getInstanceAuditLabel(instance: StoredTournamentInstance): string {
   return getTournamentInstanceLabel(normalizeInstance(instance));
-}
-
-function normalizeOrgKey(value: string | null): string {
-  return (value?.trim() || "Open").replace(/\s+/g, " ");
-}
-
-function chunkTeams<T>(items: T[], size: number): T[][] {
-  const chunks: T[][] = [];
-
-  for (let index = 0; index < items.length; index += size) {
-    chunks.push(items.slice(index, index + size));
-  }
-
-  return chunks;
-}
-
-function buildInstanceName(orgKey: string, chunkIndex: number, chunkCount: number): string {
-  if (orgKey === "Open") {
-    return `Pod ${chunkIndex + 1}`;
-  }
-
-  return chunkCount <= 1 ? orgKey : `${orgKey} Pod ${chunkIndex + 1}`;
 }
 
 function slugify(value: string): string {
@@ -99,59 +75,7 @@ export async function syncTournamentInstancesForGuild(
   guildId: string,
   actorDiscordUserId = "system"
 ): Promise<StoredTournamentInstance[]> {
-  const importedTeams = await listImportedTeams();
-  const teamsByOrg = new Map<string, StoredTeam[]>();
-
-  for (const team of importedTeams) {
-    const orgKey = normalizeOrgKey(team.discordCommunity);
-    const currentTeams = teamsByOrg.get(orgKey) ?? [];
-    currentTeams.push(team);
-    teamsByOrg.set(orgKey, currentTeams);
-  }
-
-  for (const [orgKey, teams] of teamsByOrg.entries()) {
-    const orderedTeams = [...teams].sort((left, right) =>
-      left.teamName.localeCompare(right.teamName)
-    );
-    const chunks = chunkTeams(orderedTeams, 4);
-
-    for (const [chunkIndex, chunk] of chunks.entries()) {
-      const name = buildInstanceName(orgKey, chunkIndex, chunks.length);
-      const instance = await prisma.tournamentInstance.upsert({
-        where: {
-          guildId_name: {
-            guildId,
-            name,
-          },
-        },
-        update: {
-          orgKey,
-          podNumber: chunks.length > 1 ? chunkIndex + 1 : null,
-          maxTeams: 4,
-          updatedAt: new Date(),
-        },
-        create: {
-          guildId,
-          name,
-          orgKey,
-          orgName: orgKey,
-          displayName: null,
-          internalKey: `${slugify(orgKey)}-${chunkIndex + 1}`,
-          podNumber: chunks.length > 1 ? chunkIndex + 1 : null,
-          status: TournamentInstanceStatus.REGISTRATION_READY,
-          currentCycle: null,
-          currentStage: TournamentStage.REGISTRATION,
-          maxTeams: 4,
-          isLocked: false,
-          createdAt: new Date(),
-          updatedAt: new Date(),
-        },
-      });
-
-     
-    }
-  }
-
+  void actorDiscordUserId;
   return listTournamentInstancesForGuild(guildId);
 }
 

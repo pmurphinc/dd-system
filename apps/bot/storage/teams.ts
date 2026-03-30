@@ -240,7 +240,7 @@ export async function importApprovedRegistrationToTeam(
 
   const payload = buildTeamPayload(submission);
 
-  const team = await prisma.$transaction(async (tx) => {
+  const team = await prisma.$transaction(async (tx: any) => {
     const existingBySubmission =
       submission.importedTeamId !== null
         ? await tx.team.findUnique({
@@ -415,6 +415,103 @@ export async function getTeamBySubmissionId(
   });
 
   return team ? mapTeam(team) : null;
+}
+
+export async function syncImportedTeamFromSubmission(
+  submission: StoredRegistrationSubmission,
+  actorDiscordUserId: string
+): Promise<{
+  team: StoredTeam | null;
+  updated: boolean;
+  teamNameChanged: boolean;
+  communityChanged: boolean;
+  previousTeamName: string | null;
+}> {
+  await ensureTeamTables();
+
+  if (!submission.importedTeamId) {
+    return {
+      team: null,
+      updated: false,
+      teamNameChanged: false,
+      communityChanged: false,
+      previousTeamName: null,
+    };
+  }
+
+  const existing = await loadTeamById(submission.importedTeamId);
+
+  if (!existing) {
+    return {
+      team: null,
+      updated: false,
+      teamNameChanged: false,
+      communityChanged: false,
+      previousTeamName: null,
+    };
+  }
+
+  const payload = buildTeamPayload(submission);
+  const teamNameChanged = existing.teamName !== submission.teamName;
+  const communityChanged =
+    (existing.discordCommunity?.trim() || null) !==
+    (submission.discordCommunity?.trim() || null);
+  const needsUpdate =
+    teamNameChanged ||
+    communityChanged ||
+    existing.captainName !== payload.captainName ||
+    JSON.stringify(existing.playerNames) !== payload.playerNames ||
+    existing.substituteName !== payload.substituteName ||
+    existing.leaderDiscordUserId !== payload.leaderDiscordUserId;
+
+  if (!needsUpdate) {
+    return {
+      team: existing,
+      updated: false,
+      teamNameChanged: false,
+      communityChanged: false,
+      previousTeamName: existing.teamName,
+    };
+  }
+
+  const updated = await prisma.team.update({
+    where: { id: existing.id },
+    data: {
+      teamName: submission.teamName,
+      ...payload,
+      importedFromSubmissionId: submission.id,
+    },
+    include: {
+      members: {
+        orderBy: { sortOrder: "asc" },
+      },
+    },
+  });
+
+  await createAuditLog({
+    action: "team_synced_from_sheet",
+    entityType: "team",
+    entityId: `${updated.id}`,
+    summary: `Synced imported team ${updated.teamName} from sheet.`,
+    details: [
+      teamNameChanged ? `Renamed from "${existing.teamName}".` : null,
+      communityChanged
+        ? `Community changed from "${existing.discordCommunity ?? "none"}" to "${updated.discordCommunity ?? "none"}".`
+        : null,
+      "Tournament instance assignment was preserved.",
+    ]
+      .filter(Boolean)
+      .join(" "),
+    actorDiscordUserId,
+  });
+
+  return {
+    team: mapTeam(updated),
+    updated: true,
+    teamNameChanged,
+    communityChanged,
+    previousTeamName: existing.teamName,
+  };
 }
 
 export async function setTeamPlacement(

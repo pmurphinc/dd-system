@@ -30,6 +30,24 @@ export const syncstatusCommand: BotCommand = {
     const sourceSummary = config.sources
       .map((source) => {
         const state = stateByKey.get(source.sourceKey);
+        let parsedSummary: Record<string, number> | null = null;
+        if (state?.lastSummaryJson) {
+          try {
+            parsedSummary = JSON.parse(state.lastSummaryJson) as Record<string, number>;
+          } catch {
+            parsedSummary = null;
+          }
+        }
+        const detailedLine = parsedSummary
+          ? [
+              `Teams +${parsedSummary.teamsCreated ?? 0} / updated ${parsedSummary.teamsUpdated ?? 0}`,
+              `Name changes ${parsedSummary.teamNameChanges ?? 0}`,
+              `Community changes ${parsedSummary.communityMetadataChanges ?? 0}`,
+              `Roles created ${parsedSummary.discordRolesCreated ?? 0}, renamed ${parsedSummary.discordRolesRenamed ?? 0}`,
+              `Channels created ${parsedSummary.discordChannelsCreated ?? 0}, renamed ${parsedSummary.discordChannelsRenamed ?? 0}`,
+              "Tournament instance assignments changed: 0 (admin-controlled only)",
+            ].join(" | ")
+          : "Detailed summary unavailable for the last run.";
 
         return [
           `${source.sourceLabel}`,
@@ -38,6 +56,7 @@ export const syncstatusCommand: BotCommand = {
           `Resolved Range: ${state?.lastResolvedRange ?? "not resolved yet"}`,
           `Last success: ${state?.lastSuccessfulSyncAt?.toISOString() ?? "never"}`,
           `Last run: +${state?.lastImportedCount ?? 0} / =${state?.lastDuplicateCount ?? 0} / !${state?.lastInvalidCount ?? 0}`,
+          detailedLine,
           `Last error: ${state?.lastError ?? "none"}`,
         ].join("\n");
       })
