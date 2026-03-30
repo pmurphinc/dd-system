@@ -63,6 +63,17 @@ function normalizePrivateKey(value: string | undefined): string | undefined {
   return value?.replace(/\\n/g, "\n").trim() || undefined;
 }
 
+function parseSpreadsheetId(rawValue: string | undefined): string {
+  const trimmed = rawValue?.trim() || "";
+
+  if (!trimmed) {
+    return "";
+  }
+
+  const urlMatch = trimmed.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+  return urlMatch?.[1] ?? trimmed;
+}
+
 export function getRegistrationSyncConfig(): RegistrationSyncConfig {
   const intervalSeconds = Number(
     process.env.GOOGLE_SHEETS_SYNC_INTERVAL_SECONDS ?? "120"
@@ -77,10 +88,21 @@ export function getRegistrationSyncConfig(): RegistrationSyncConfig {
       sourceLabel:
         process.env.GOOGLE_SHEET_REGISTRATION_LABEL?.trim() ||
         "Development Division Registration Form",
-      spreadsheetId: process.env.GOOGLE_SHEET_REGISTRATION_ID?.trim() || "",
+      spreadsheetId: parseSpreadsheetId(process.env.GOOGLE_SHEET_REGISTRATION_ID),
       worksheetTitle:
         process.env.GOOGLE_SHEET_REGISTRATION_TAB?.trim() || undefined,
       enabled: boolFromEnv(process.env.GOOGLE_SHEET_REGISTRATION_ENABLED, true),
+    },
+    {
+      sourceKey: "7th-circle",
+      sourceLabel:
+        process.env.GOOGLE_SHEET_7TH_CIRCLE_LABEL?.trim() || "7th Circle",
+      spreadsheetId: parseSpreadsheetId(process.env.GOOGLE_SHEET_7TH_CIRCLE_ID),
+      worksheetTitle:
+        process.env.GOOGLE_SHEET_7TH_CIRCLE_TAB?.trim() ||
+        process.env.GOOGLE_SHEET_REGISTRATION_TAB?.trim() ||
+        undefined,
+      enabled: boolFromEnv(process.env.GOOGLE_SHEET_7TH_CIRCLE_ENABLED, true),
     },
   ];
 
@@ -544,6 +566,29 @@ async function syncSource(
     return;
   }
 
+  if (!source.spreadsheetId) {
+    await upsertRegistrationSyncSourceState({
+      sourceKey: source.sourceKey,
+      sourceLabel: source.sourceLabel,
+      spreadsheetId: "",
+      worksheetTitle: source.worksheetTitle ?? null,
+      lastResolvedRange: source.worksheetTitle
+        ? buildWorksheetA1Range(source.worksheetTitle)
+        : null,
+      enabled: false,
+      lastCheckedAt: new Date(),
+      lastImportedCount: 0,
+      lastDuplicateCount: 0,
+      lastInvalidCount: 0,
+      lastSummaryJson: JSON.stringify({
+        skipped: 1,
+        reason: "missing_spreadsheet_id",
+      }),
+      lastError: null,
+    });
+    return;
+  }
+
   await logRegistrationSyncPollStart(source.sourceLabel);
 
   try {
@@ -789,11 +834,13 @@ export function startRegistrationSheetSyncPolling(client?: Client): void {
     return;
   }
 
-  const enabledSources = config.sources.filter((source) => source.enabled);
+  const enabledConfiguredSources = config.sources.filter(
+    (source) => source.enabled && source.spreadsheetId
+  );
 
-  if (enabledSources.length === 0 || !enabledSources[0]?.spreadsheetId) {
+  if (enabledConfiguredSources.length === 0) {
     console.error(
-      "[registration-sync] missing GOOGLE_SHEET_REGISTRATION_ID or no enabled registration source; polling not started."
+      "[registration-sync] no enabled+configured registration sources found; polling not started."
     );
     return;
   }
@@ -810,7 +857,7 @@ export function startRegistrationSheetSyncPolling(client?: Client): void {
 
   console.log(
     `[registration-sync] polling ${config.sources
-      .filter((source) => source.enabled)
+      .filter((source) => source.enabled && source.spreadsheetId)
       .map((source) => source.sourceLabel)
       .join(", ")} every ${Math.round(config.intervalMs / 1000)}s. scopes=${config.scopes.join(
       ","
