@@ -1,7 +1,7 @@
 import { createSign } from "crypto";
+import { Client, Guild } from "discord.js";
 import {
-  createRegistrationSubmission,
-  hasRegistrationSourceRowKey,
+  syncRegistrationSubmissionFromSourceRow,
   RegistrationPlayerInput,
 } from "../storage/registrations";
 import {
@@ -11,6 +11,8 @@ import {
   recordRegistrationSyncIssue,
   upsertRegistrationSyncSourceState,
 } from "../storage/registrationSync";
+import { ensureDiscordTeamSetup } from "./discordTeamSetup";
+import { getTeamBySubmissionId, syncImportedTeamFromSubmission } from "../storage/teams";
 
 interface SheetSyncSourceConfig {
   sourceKey: string;
@@ -36,6 +38,7 @@ interface NormalizedSheetRow {
   leaderDiscordIdentifier: string;
   leaderDisplayName: string;
   discordCommunity: string | null;
+  discordCommunityKey: string | null;
   originalSubmittedAt: Date | null;
   mapBan: string | null;
   submittedNotes: string;
@@ -60,6 +63,17 @@ function normalizePrivateKey(value: string | undefined): string | undefined {
   return value?.replace(/\\n/g, "\n").trim() || undefined;
 }
 
+function parseSpreadsheetId(rawValue: string | undefined): string {
+  const trimmed = rawValue?.trim() || "";
+
+  if (!trimmed) {
+    return "";
+  }
+
+  const urlMatch = trimmed.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+  return urlMatch?.[1] ?? trimmed;
+}
+
 export function getRegistrationSyncConfig(): RegistrationSyncConfig {
   const intervalSeconds = Number(
     process.env.GOOGLE_SHEETS_SYNC_INTERVAL_SECONDS ?? "120"
@@ -74,10 +88,21 @@ export function getRegistrationSyncConfig(): RegistrationSyncConfig {
       sourceLabel:
         process.env.GOOGLE_SHEET_REGISTRATION_LABEL?.trim() ||
         "Development Division Registration Form",
-      spreadsheetId: process.env.GOOGLE_SHEET_REGISTRATION_ID?.trim() || "",
+      spreadsheetId: parseSpreadsheetId(process.env.GOOGLE_SHEET_REGISTRATION_ID),
       worksheetTitle:
         process.env.GOOGLE_SHEET_REGISTRATION_TAB?.trim() || undefined,
       enabled: boolFromEnv(process.env.GOOGLE_SHEET_REGISTRATION_ENABLED, true),
+    },
+    {
+      sourceKey: "7th-circle",
+      sourceLabel:
+        process.env.GOOGLE_SHEET_7TH_CIRCLE_LABEL?.trim() || "7th Circle",
+      spreadsheetId: parseSpreadsheetId(process.env.GOOGLE_SHEET_7TH_CIRCLE_ID),
+      worksheetTitle:
+        process.env.GOOGLE_SHEET_7TH_CIRCLE_TAB?.trim() ||
+        process.env.GOOGLE_SHEET_REGISTRATION_TAB?.trim() ||
+        undefined,
+      enabled: boolFromEnv(process.env.GOOGLE_SHEET_7TH_CIRCLE_ENABLED, true),
     },
   ];
 
@@ -220,6 +245,15 @@ function normalizeOptionalValue(value: string): string | null {
   return trimmed ? trimmed : null;
 }
 
+function normalizeCommunityKey(value: string | null): string | null {
+  if (!value) {
+    return null;
+  }
+
+  const key = value.trim().toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  return key || null;
+}
+
 function normalizeRow(
   source: SheetSyncSourceConfig,
   worksheetTitle: string,
@@ -344,6 +378,9 @@ function normalizeRow(
       .trim(),
     leaderDisplayName,
     discordCommunity: normalizeOptionalValue(readCell(row, discordCommunityIndex)),
+    discordCommunityKey: normalizeCommunityKey(
+      normalizeOptionalValue(readCell(row, discordCommunityIndex))
+    ),
     originalSubmittedAt: parseSubmittedAt(readCell(row, timestampIndex)),
     mapBan: readCell(row, mapBanIndex) || null,
     submittedNotes: buildSubmittedNotes([
@@ -509,8 +546,8 @@ async function fetchSheetValues(
 
 async function syncSource(
   source: SheetSyncSourceConfig,
-  config: RegistrationSyncConfig,
-  accessToken: string
+  accessToken: string,
+  guild: Guild | null
 ): Promise<void> {
   if (!source.enabled) {
     await upsertRegistrationSyncSourceState({
@@ -525,6 +562,29 @@ async function syncSource(
       lastImportedCount: 0,
       lastDuplicateCount: 0,
       lastInvalidCount: 0,
+    });
+    return;
+  }
+
+  if (!source.spreadsheetId) {
+    await upsertRegistrationSyncSourceState({
+      sourceKey: source.sourceKey,
+      sourceLabel: source.sourceLabel,
+      spreadsheetId: "",
+      worksheetTitle: source.worksheetTitle ?? null,
+      lastResolvedRange: source.worksheetTitle
+        ? buildWorksheetA1Range(source.worksheetTitle)
+        : null,
+      enabled: false,
+      lastCheckedAt: new Date(),
+      lastImportedCount: 0,
+      lastDuplicateCount: 0,
+      lastInvalidCount: 0,
+      lastSummaryJson: JSON.stringify({
+        skipped: 1,
+        reason: "missing_spreadsheet_id",
+      }),
+      lastError: null,
     });
     return;
   }
@@ -551,8 +611,15 @@ async function syncSource(
     );
     const headers = values[0] ?? [];
     let imported = 0;
-    let duplicates = 0;
+    let unchanged = 0;
     let invalid = 0;
+    let updated = 0;
+    let teamNameChanges = 0;
+    let communityChanges = 0;
+    let rolesCreated = 0;
+    let rolesRenamed = 0;
+    let channelsCreated = 0;
+    let channelsRenamed = 0;
 
     for (let index = 1; index < values.length; index += 1) {
       const row = values[index] ?? [];
@@ -560,11 +627,6 @@ async function syncSource(
       const rowKey = `${source.spreadsheetId}:${worksheetTitle}:${rowNumber}`;
 
       if (row.every((cell) => !cell?.trim())) {
-        continue;
-      }
-
-      if (await hasRegistrationSourceRowKey(rowKey)) {
-        duplicates += 1;
         continue;
       }
 
@@ -577,7 +639,7 @@ async function syncSource(
           rowNumber
         );
 
-        await createRegistrationSubmission({
+        const result = await syncRegistrationSubmissionFromSourceRow({
           teamName: normalized.teamName,
           leaderDiscordUserId: normalized.leaderDiscordIdentifier,
           leaderDisplayName: normalized.leaderDisplayName,
@@ -585,17 +647,60 @@ async function syncSource(
           sourceLabel: source.sourceLabel,
           sourceSpreadsheetId: source.spreadsheetId,
           sourceWorksheetTitle: worksheetTitle,
-          sourceRowKey: normalized.rowKey,
+          sourceRowKey: rowKey,
           sourceRowNumber: normalized.rowNumber,
           originalSubmittedAt: normalized.originalSubmittedAt,
-          mapBan: normalized.mapBan ?? undefined,
-          syncImportedAt: new Date(),
+          mapBan: normalized.mapBan,
           submittedNotes: normalized.submittedNotes,
-          createdByDiscordUserId: "google-sheets-sync",
-          createdByDisplayName: "Google Sheets Sync",
+          actorDiscordUserId: "google-sheets-sync",
+          actorDisplayName: "Google Sheets Sync",
           players: normalized.players,
         });
-        imported += 1;
+
+        if (result.created) {
+          imported += 1;
+        }
+
+        if (result.updated) {
+          updated += 1;
+          if (result.teamNameChanged) {
+            teamNameChanges += 1;
+          }
+          if (result.communityChanged) {
+            communityChanges += 1;
+          }
+
+          const teamSync = await syncImportedTeamFromSubmission(
+            result.submission,
+            "google-sheets-sync"
+          );
+
+          if (teamSync.team && guild) {
+            const setup = await ensureDiscordTeamSetup(
+              guild,
+              teamSync.team,
+              "google-sheets-sync",
+              teamSync.previousTeamName
+            );
+            if (setup.roleAction === "created") rolesCreated += 1;
+            if (setup.roleAction === "renamed") rolesRenamed += 1;
+            if (setup.voiceAction === "created") channelsCreated += 1;
+            if (setup.voiceAction === "renamed") channelsRenamed += 1;
+          }
+        } else if (!result.created) {
+          const team = await getTeamBySubmissionId(result.submission.id);
+          if (team && guild) {
+            const setup = await ensureDiscordTeamSetup(
+              guild,
+              team,
+              "google-sheets-sync"
+            );
+            if (setup.roleAction === "created") rolesCreated += 1;
+            if (setup.voiceAction === "created") channelsCreated += 1;
+          } else {
+            unchanged += 1;
+          }
+        }
       } catch (error) {
         invalid += 1;
 
@@ -624,16 +729,37 @@ async function syncSource(
       lastCheckedAt: new Date(),
       lastSuccessfulSyncAt: new Date(),
       lastImportedCount: imported,
-      lastDuplicateCount: duplicates,
+      lastDuplicateCount: unchanged,
       lastInvalidCount: invalid,
+      lastSummaryJson: JSON.stringify({
+        teamsCreated: imported,
+        teamsUpdated: updated,
+        teamNameChanges,
+        communityMetadataChanges: communityChanges,
+        discordRolesCreated: rolesCreated,
+        discordRolesRenamed: rolesRenamed,
+        discordChannelsCreated: channelsCreated,
+        discordChannelsRenamed: channelsRenamed,
+        instanceAssignmentsChanged: 0,
+      }),
       lastError: null,
     });
 
     await logRegistrationSyncPollComplete({
       sourceLabel: source.sourceLabel,
       imported,
-      duplicates,
+      duplicates: unchanged,
       invalid,
+      details: [
+        `teams_updated=${updated}`,
+        `team_name_changes=${teamNameChanges}`,
+        `community_changes=${communityChanges}`,
+        `roles_created=${rolesCreated}`,
+        `roles_renamed=${rolesRenamed}`,
+        `channels_created=${channelsCreated}`,
+        `channels_renamed=${channelsRenamed}`,
+        "instance_assignments_changed=0",
+      ].join(" "),
     });
   } catch (error) {
     const message =
@@ -651,6 +777,7 @@ async function syncSource(
       lastImportedCount: 0,
       lastDuplicateCount: 0,
       lastInvalidCount: 0,
+      lastSummaryJson: null,
       lastError: message,
     });
     await logRegistrationSyncFailure({
@@ -661,7 +788,7 @@ async function syncSource(
   }
 }
 
-export async function pollRegistrationSheetsOnce(): Promise<void> {
+export async function pollRegistrationSheetsOnce(client?: Client): Promise<void> {
   const config = getRegistrationSyncConfig();
 
   if (!config.enabled) {
@@ -676,9 +803,12 @@ export async function pollRegistrationSheetsOnce(): Promise<void> {
 
   try {
     const accessToken = await getGoogleAccessToken(config);
+    const guildId = process.env.DISCORD_GUILD_ID?.trim();
+    const guild =
+      guildId && client ? await client.guilds.fetch(guildId).catch(() => null) : null;
 
     for (const source of config.sources) {
-      await syncSource(source, config, accessToken);
+      await syncSource(source, accessToken, guild);
     }
   } catch (error) {
     const message =
@@ -689,7 +819,7 @@ export async function pollRegistrationSheetsOnce(): Promise<void> {
   }
 }
 
-export function startRegistrationSheetSyncPolling(): void {
+export function startRegistrationSheetSyncPolling(client?: Client): void {
   const config = getRegistrationSyncConfig();
 
   if (!config.enabled) {
@@ -704,11 +834,13 @@ export function startRegistrationSheetSyncPolling(): void {
     return;
   }
 
-  const enabledSources = config.sources.filter((source) => source.enabled);
+  const enabledConfiguredSources = config.sources.filter(
+    (source) => source.enabled && source.spreadsheetId
+  );
 
-  if (enabledSources.length === 0 || !enabledSources[0]?.spreadsheetId) {
+  if (enabledConfiguredSources.length === 0) {
     console.error(
-      "[registration-sync] missing GOOGLE_SHEET_REGISTRATION_ID or no enabled registration source; polling not started."
+      "[registration-sync] no enabled+configured registration sources found; polling not started."
     );
     return;
   }
@@ -717,15 +849,15 @@ export function startRegistrationSheetSyncPolling(): void {
     return;
   }
 
-  void pollRegistrationSheetsOnce();
+  void pollRegistrationSheetsOnce(client);
   syncIntervalHandle = setInterval(() => {
-    void pollRegistrationSheetsOnce();
+    void pollRegistrationSheetsOnce(client);
   }, config.intervalMs);
   syncIntervalHandle.unref?.();
 
   console.log(
     `[registration-sync] polling ${config.sources
-      .filter((source) => source.enabled)
+      .filter((source) => source.enabled && source.spreadsheetId)
       .map((source) => source.sourceLabel)
       .join(", ")} every ${Math.round(config.intervalMs / 1000)}s. scopes=${config.scopes.join(
       ","
