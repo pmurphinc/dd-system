@@ -16,6 +16,7 @@ export interface RegistrationSyncSourceStateRow {
   totalImportedCount: number;
   totalDuplicateCount: number;
   totalInvalidCount: number;
+  lastSummaryJson: string | null;
   lastError: string | null;
   updatedAt: Date;
 }
@@ -68,6 +69,7 @@ async function ensureRegistrationSyncTables(): Promise<void> {
         "totalImportedCount" INTEGER NOT NULL DEFAULT 0,
         "totalDuplicateCount" INTEGER NOT NULL DEFAULT 0,
         "totalInvalidCount" INTEGER NOT NULL DEFAULT 0,
+        "lastSummaryJson" TEXT,
         "lastError" TEXT,
         "updatedAt" DATETIME NOT NULL
       )
@@ -127,6 +129,11 @@ async function ensureRegistrationSyncTables(): Promise<void> {
       "RegistrationSyncSourceState",
       "totalInvalidCount",
       `ALTER TABLE "RegistrationSyncSourceState" ADD COLUMN "totalInvalidCount" INTEGER NOT NULL DEFAULT 0`
+    );
+    await ensureColumn(
+      "RegistrationSyncSourceState",
+      "lastSummaryJson",
+      `ALTER TABLE "RegistrationSyncSourceState" ADD COLUMN "lastSummaryJson" TEXT`
     );
     await ensureColumn(
       "RegistrationSyncSourceState",
@@ -192,6 +199,7 @@ export async function upsertRegistrationSyncSourceState(input: {
   lastImportedCount: number;
   lastDuplicateCount: number;
   lastInvalidCount: number;
+  lastSummaryJson?: string | null;
   lastError?: string | null;
 }): Promise<void> {
   await ensureRegistrationSyncTables();
@@ -218,7 +226,7 @@ export async function upsertRegistrationSyncSourceState(input: {
        SET "sourceLabel" = ?, "spreadsheetId" = ?, "worksheetTitle" = ?, "lastResolvedRange" = ?,
            "enabled" = ?, "lastCheckedAt" = ?, "lastSuccessfulSyncAt" = ?, "lastImportedCount" = ?,
            "lastDuplicateCount" = ?, "lastInvalidCount" = ?, "totalImportedCount" = ?,
-           "totalDuplicateCount" = ?, "totalInvalidCount" = ?, "lastError" = ?, "updatedAt" = ?
+           "totalDuplicateCount" = ?, "totalInvalidCount" = ?, "lastSummaryJson" = ?, "lastError" = ?, "updatedAt" = ?
        WHERE "sourceKey" = ?`,
       input.sourceLabel,
       input.spreadsheetId,
@@ -233,6 +241,7 @@ export async function upsertRegistrationSyncSourceState(input: {
       totalImportedCount,
       totalDuplicateCount,
       totalInvalidCount,
+      input.lastSummaryJson ?? null,
       input.lastError ?? null,
       now,
       input.sourceKey
@@ -245,8 +254,8 @@ export async function upsertRegistrationSyncSourceState(input: {
       "sourceKey", "sourceLabel", "spreadsheetId", "worksheetTitle", "lastResolvedRange",
       "enabled", "lastCheckedAt", "lastSuccessfulSyncAt", "lastImportedCount",
       "lastDuplicateCount", "lastInvalidCount", "totalImportedCount", "totalDuplicateCount",
-      "totalInvalidCount", "lastError", "updatedAt"
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      "totalInvalidCount", "lastSummaryJson", "lastError", "updatedAt"
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     input.sourceKey,
     input.sourceLabel,
     input.spreadsheetId,
@@ -261,6 +270,7 @@ export async function upsertRegistrationSyncSourceState(input: {
     input.lastImportedCount,
     input.lastDuplicateCount,
     input.lastInvalidCount,
+    input.lastSummaryJson ?? null,
     input.lastError ?? null,
     now
   );
@@ -344,6 +354,7 @@ export async function logRegistrationSyncPollComplete(input: {
   imported: number;
   duplicates: number;
   invalid: number;
+  details?: string;
   actorDiscordUserId?: string;
 }): Promise<void> {
   await createAuditLog({
@@ -351,7 +362,13 @@ export async function logRegistrationSyncPollComplete(input: {
     entityType: "registration_sync",
     entityId: input.sourceLabel,
     summary: `Completed sheet poll for ${input.sourceLabel}.`,
-    details: `Imported ${input.imported}, duplicates ${input.duplicates}, invalid ${input.invalid}.`,
+    details: [
+      `Imported ${input.imported}, duplicates ${input.duplicates}, invalid ${input.invalid}.`,
+      input.details ?? null,
+      "Tournament instance assignments changed: 0.",
+    ]
+      .filter(Boolean)
+      .join(" "),
     actorDiscordUserId: input.actorDiscordUserId ?? "system",
   });
 }

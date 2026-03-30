@@ -397,6 +397,214 @@ export async function hasRegistrationSourceRowKey(
   return count > 0;
 }
 
+export async function getRegistrationBySourceRowKey(
+  sourceRowKey: string
+): Promise<StoredRegistrationSubmission | null> {
+  await ensureRegistrationTables();
+
+  const row = await prisma.registrationSubmission.findUnique({
+    where: { sourceRowKey },
+    include: {
+      players: {
+        orderBy: { sortOrder: "asc" },
+      },
+    },
+  });
+
+  return row ? mapSubmission(row) : null;
+}
+
+export async function syncRegistrationSubmissionFromSourceRow(input: {
+  sourceRowKey: string;
+  teamName: string;
+  leaderDiscordUserId: string;
+  leaderDisplayName: string;
+  discordCommunity: string | null;
+  sourceLabel: string;
+  sourceSpreadsheetId: string;
+  sourceWorksheetTitle: string;
+  sourceRowNumber: number;
+  originalSubmittedAt: Date | null;
+  mapBan: string | null;
+  submittedNotes: string;
+  players: RegistrationPlayerInput[];
+  actorDiscordUserId: string;
+  actorDisplayName: string;
+}): Promise<{
+  submission: StoredRegistrationSubmission;
+  created: boolean;
+  updated: boolean;
+  teamNameChanged: boolean;
+  communityChanged: boolean;
+}> {
+  await ensureRegistrationTables();
+
+  const existing = await getRegistrationBySourceRowKey(input.sourceRowKey);
+
+  if (!existing) {
+    const created = await createRegistrationSubmission({
+      teamName: input.teamName,
+      leaderDiscordUserId: input.leaderDiscordUserId,
+      leaderDisplayName: input.leaderDisplayName,
+      discordCommunity: input.discordCommunity,
+      sourceLabel: input.sourceLabel,
+      sourceSpreadsheetId: input.sourceSpreadsheetId,
+      sourceWorksheetTitle: input.sourceWorksheetTitle,
+      sourceRowKey: input.sourceRowKey,
+      sourceRowNumber: input.sourceRowNumber,
+      originalSubmittedAt: input.originalSubmittedAt,
+      mapBan: input.mapBan ?? undefined,
+      syncImportedAt: new Date(),
+      submittedNotes: input.submittedNotes,
+      createdByDiscordUserId: input.actorDiscordUserId,
+      createdByDisplayName: input.actorDisplayName,
+      players: input.players,
+    });
+
+    return {
+      submission: created,
+      created: true,
+      updated: false,
+      teamNameChanged: false,
+      communityChanged: false,
+    };
+  }
+
+  const incomingCommunity = input.discordCommunity?.trim() || null;
+  const existingCommunity = existing.discordCommunity?.trim() || null;
+  const incomingLeaderId = input.leaderDiscordUserId.trim();
+  const existingLeaderId = existing.leaderDiscordUserId.trim();
+  const incomingLeaderName = input.leaderDisplayName.trim();
+  const existingLeaderName = existing.leaderDisplayName.trim();
+  const teamNameChanged = existing.teamName !== input.teamName;
+  const communityChanged = existingCommunity !== incomingCommunity;
+  const metadataChanged =
+    teamNameChanged ||
+    communityChanged ||
+    existing.sourceRowNumber !== input.sourceRowNumber ||
+    existing.mapBan !== (input.mapBan ?? null) ||
+    existing.submittedNotes !== input.submittedNotes ||
+    existing.sourceWorksheetTitle !== input.sourceWorksheetTitle ||
+    existing.sourceSpreadsheetId !== input.sourceSpreadsheetId ||
+    existing.sourceLabel !== input.sourceLabel ||
+    existingLeaderId !== incomingLeaderId ||
+    existingLeaderName !== incomingLeaderName ||
+    (existing.originalSubmittedAt?.toISOString() ?? null) !==
+      (input.originalSubmittedAt?.toISOString() ?? null);
+
+  const existingPlayers = [...existing.players]
+    .sort((left, right) => left.sortOrder - right.sortOrder)
+    .map((player) => ({
+      displayName: player.displayName,
+      discordUserId: player.discordUserId ?? null,
+      embarkId: player.embarkId,
+      screenshotLink: player.screenshotLink,
+      isLeader: player.isLeader,
+      sortOrder: player.sortOrder,
+    }));
+  const incomingPlayers = [...input.players]
+    .sort((left, right) => left.sortOrder - right.sortOrder)
+    .map((player) => ({
+      displayName: player.displayName,
+      discordUserId: player.discordUserId ?? null,
+      embarkId: player.embarkId,
+      screenshotLink: player.screenshotLink,
+      isLeader: player.isLeader,
+      sortOrder: player.sortOrder,
+    }));
+  const playersChanged =
+    JSON.stringify(existingPlayers) !== JSON.stringify(incomingPlayers);
+
+  if (!metadataChanged && !playersChanged) {
+    return {
+      submission: existing,
+      created: false,
+      updated: false,
+      teamNameChanged: false,
+      communityChanged: false,
+    };
+  }
+
+  const now = new Date();
+  const updated = await prisma.$transaction(async (tx: any) => {
+    const submission = await tx.registrationSubmission.update({
+      where: { id: existing.id },
+      data: {
+        teamName: input.teamName,
+        leaderDiscordUserId: incomingLeaderId,
+        leaderDisplayName: incomingLeaderName || "Leader",
+        discordCommunity: incomingCommunity,
+        sourceLabel: input.sourceLabel,
+        sourceSpreadsheetId: input.sourceSpreadsheetId,
+        sourceWorksheetTitle: input.sourceWorksheetTitle,
+        sourceRowNumber: input.sourceRowNumber,
+        originalSubmittedAt: input.originalSubmittedAt,
+        mapBan: input.mapBan ?? null,
+        syncImportedAt: now,
+        submittedNotes: input.submittedNotes,
+        updatedAt: now,
+      },
+      include: {
+        players: {
+          orderBy: { sortOrder: "asc" },
+        },
+      },
+    });
+
+    if (playersChanged) {
+      await tx.registrationPlayer.deleteMany({
+        where: { submissionId: existing.id },
+      });
+      await tx.registrationPlayer.createMany({
+        data: input.players.map((player) => ({
+          submissionId: existing.id,
+          displayName: player.displayName,
+          discordUserId: player.discordUserId ?? null,
+          embarkId: player.embarkId,
+          screenshotLink: player.screenshotLink,
+          isLeader: player.isLeader,
+          sortOrder: player.sortOrder,
+        })),
+      });
+    }
+
+    return tx.registrationSubmission.findUniqueOrThrow({
+      where: { id: submission.id },
+      include: {
+        players: {
+          orderBy: { sortOrder: "asc" },
+        },
+      },
+    });
+  });
+
+  await createAuditLog({
+    action: "registration_synced_from_sheet",
+    entityType: "registration_submission",
+    entityId: `${updated.id}`,
+    summary: `Synced submission for ${updated.teamName} from Google Sheets.`,
+    details: [
+      teamNameChanged ? `Team renamed from "${existing.teamName}" to "${updated.teamName}".` : null,
+      communityChanged
+        ? `Community changed from "${existingCommunity ?? "none"}" to "${incomingCommunity ?? "none"}".`
+        : null,
+      playersChanged ? "Player roster updated from source row." : null,
+      "Tournament instance placement was not modified by sync.",
+    ]
+      .filter(Boolean)
+      .join(" "),
+    actorDiscordUserId: input.actorDiscordUserId,
+  });
+
+  return {
+    submission: mapSubmission(updated),
+    created: false,
+    updated: true,
+    teamNameChanged,
+    communityChanged,
+  };
+}
+
 export async function getRegistrationSummary(): Promise<RegistrationSummary> {
   await ensureRegistrationTables();
 

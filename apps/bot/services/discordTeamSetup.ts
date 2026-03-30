@@ -23,8 +23,8 @@ interface ResolvedGuildSetupConfig {
 export interface TeamSetupResult {
   teamRole: Role;
   voiceChannel: VoiceChannel;
-  roleAction: "created" | "reused";
-  voiceAction: "created" | "reused";
+  roleAction: "created" | "reused" | "renamed";
+  voiceAction: "created" | "reused" | "renamed";
   players: string[];
 }
 
@@ -143,7 +143,8 @@ async function resolveVoiceCategory(
 export async function ensureDiscordTeamSetup(
   guild: Guild,
   team: StoredTeam,
-  actorDiscordUserId: string
+  actorDiscordUserId: string,
+  previousTeamName?: string | null
 ): Promise<TeamSetupResult> {
   const config = await resolveSetupConfig(guild);
   const voiceCategory = await resolveVoiceCategory(
@@ -152,7 +153,12 @@ export async function ensureDiscordTeamSetup(
     config.fallbackVoiceCategoryId
   );
 
-  const existingRole = guild.roles.cache.find((role) => role.name === team.teamName);
+  const existingRole =
+    (team.discordRoleId ? guild.roles.cache.get(team.discordRoleId) : null) ??
+    guild.roles.cache.find((role) => role.name === team.teamName) ??
+    (previousTeamName
+      ? guild.roles.cache.find((role) => role.name === previousTeamName)
+      : null);
   const teamRole =
     existingRole ??
     (await guild.roles.create({
@@ -161,7 +167,18 @@ export async function ensureDiscordTeamSetup(
       reason: `Development Division setup for ${team.teamName}`,
     }));
 
-  const roleAction = existingRole ? "reused" : "created";
+  const roleAction = !existingRole
+    ? "created"
+    : teamRole.name !== team.teamName
+      ? "renamed"
+      : "reused";
+
+  if (roleAction === "renamed") {
+    await teamRole.edit({
+      name: team.teamName,
+      reason: `Sync rename for ${team.teamName}`,
+    });
+  }
 
   await updateTeamDiscordAssets(
     team.id,
@@ -170,11 +187,23 @@ export async function ensureDiscordTeamSetup(
     actorDiscordUserId
   );
 
-  const existingVoice = guild.channels.cache.find(
-    (channel): channel is VoiceChannel =>
-      channel.type === ChannelType.GuildVoice &&
-      channel.name === team.teamName
-  );
+  const voiceById = team.voiceChannelId
+    ? guild.channels.cache.get(team.voiceChannelId)
+    : null;
+  const existingVoice =
+    (voiceById && voiceById.type === ChannelType.GuildVoice ? voiceById : null) ??
+    guild.channels.cache.find(
+      (channel): channel is VoiceChannel =>
+        channel.type === ChannelType.GuildVoice &&
+        channel.name === team.teamName
+    ) ??
+    (previousTeamName
+      ? guild.channels.cache.find(
+          (channel): channel is VoiceChannel =>
+            channel.type === ChannelType.GuildVoice &&
+            channel.name === previousTeamName
+        )
+      : null);
 
   const adminOverwrite = config.adminRole
     ? [
@@ -234,26 +263,40 @@ export async function ensureDiscordTeamSetup(
         reason: `Development Division setup for ${team.teamName}`,
       });
 
-  const voiceAction = existingVoice ? "reused" : "created";
+  const voiceAction = !existingVoice
+    ? "created"
+    : existingVoice.name !== team.teamName
+      ? "renamed"
+      : "reused";
 
   await updateTeamDiscordAssets(team.id, teamRole.id, voiceChannel.id, actorDiscordUserId);
 
   await createAuditLog({
     guildId: guild.id,
-    action: roleAction === "created" ? "team_role_created" : "team_role_reused",
+    action:
+      roleAction === "created"
+        ? "team_role_created"
+        : roleAction === "renamed"
+          ? "team_role_renamed"
+          : "team_role_reused",
     entityType: "team",
     entityId: `${team.id}`,
-    summary: `${roleAction === "created" ? "Created" : "Reused"} team role for ${team.teamName}.`,
+    summary: `${roleAction === "created" ? "Created" : roleAction === "renamed" ? "Renamed" : "Reused"} team role for ${team.teamName}.`,
     details: `Role id ${teamRole.id}.`,
     actorDiscordUserId,
   });
 
   await createAuditLog({
     guildId: guild.id,
-    action: voiceAction === "created" ? "team_voice_created" : "team_voice_reused",
+    action:
+      voiceAction === "created"
+        ? "team_voice_created"
+        : voiceAction === "renamed"
+          ? "team_voice_renamed"
+          : "team_voice_reused",
     entityType: "team",
     entityId: `${team.id}`,
-    summary: `${voiceAction === "created" ? "Created" : "Reused"} voice channel for ${team.teamName}.`,
+    summary: `${voiceAction === "created" ? "Created" : voiceAction === "renamed" ? "Renamed" : "Reused"} voice channel for ${team.teamName}.`,
     details: `Channel id ${voiceChannel.id}${voiceCategory ? ` in ${voiceCategory.name}` : ""}.`,
     actorDiscordUserId,
   });

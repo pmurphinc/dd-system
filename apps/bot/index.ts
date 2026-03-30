@@ -83,7 +83,7 @@ async function registerCommands() {
 client.once("ready", async () => {
   console.log(`Bot is online as ${client.user?.tag}`);
   await registerCommands();
-  startRegistrationSheetSyncPolling();
+  startRegistrationSheetSyncPolling(client);
 });
 
 client.on("interactionCreate", async (interaction) => {

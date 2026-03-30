@@ -225,6 +225,7 @@ model RegistrationSyncSourceState {
   totalImportedCount     Int
   totalDuplicateCount    Int
   totalInvalidCount      Int
+  lastSummaryJson        String?
   lastError              String?
   updatedAt              DateTime
 }
