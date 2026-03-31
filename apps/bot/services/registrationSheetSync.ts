@@ -5,6 +5,7 @@ import {
   RegistrationPlayerInput,
 } from "../storage/registrations";
 import {
+  clearRegistrationSyncIssue,
   logRegistrationSyncFailure,
   logRegistrationSyncPollComplete,
   logRegistrationSyncPollStart,
@@ -43,6 +44,11 @@ interface NormalizedSheetRow {
   mapBan: string | null;
   submittedNotes: string;
   players: RegistrationPlayerInput[];
+}
+
+interface RowValidationIssue {
+  severity: "warning" | "error";
+  reason: string;
 }
 
 let syncIntervalHandle: NodeJS.Timeout | undefined;
@@ -391,6 +397,24 @@ function normalizeRow(
   };
 }
 
+function getRowValidationIssues(row: NormalizedSheetRow): RowValidationIssue[] {
+  const issues: RowValidationIssue[] = [];
+  const missingAccessPlayers = row.players.filter((player) =>
+    player.screenshotLink.toLowerCase().includes("missing access")
+  );
+
+  if (missingAccessPlayers.length > 0) {
+    issues.push({
+      severity: "warning",
+      reason: `Missing Access (${missingAccessPlayers
+        .map((player) => player.displayName)
+        .join(", ")})`,
+    });
+  }
+
+  return issues;
+}
+
 function toBase64Url(input: string): string {
   return Buffer.from(input).toString("base64url");
 }
@@ -613,6 +637,7 @@ async function syncSource(
     let imported = 0;
     let unchanged = 0;
     let invalid = 0;
+    let warnings = 0;
     let updated = 0;
     let teamNameChanges = 0;
     let communityChanges = 0;
@@ -638,6 +663,16 @@ async function syncSource(
           row,
           rowNumber
         );
+        const validationIssues = getRowValidationIssues(normalized);
+        const warningReasons = validationIssues
+          .filter((issue) => issue.severity === "warning")
+          .map((issue) => issue.reason);
+        const submittedNotesWithWarnings = [
+          normalized.submittedNotes,
+          ...warningReasons.map((reason) => `Validation warning: ${reason}`),
+        ]
+          .filter(Boolean)
+          .join("\n");
 
         const result = await syncRegistrationSubmissionFromSourceRow({
           teamName: normalized.teamName,
@@ -651,17 +686,40 @@ async function syncSource(
           sourceRowNumber: normalized.rowNumber,
           originalSubmittedAt: normalized.originalSubmittedAt,
           mapBan: normalized.mapBan,
-          submittedNotes: normalized.submittedNotes,
+          submittedNotes: submittedNotesWithWarnings,
           actorDiscordUserId: "google-sheets-sync",
           actorDisplayName: "Google Sheets Sync",
           players: normalized.players,
         });
 
+        for (const warning of warningReasons) {
+          warnings += 1;
+          await recordRegistrationSyncIssue({
+            sourceKey: source.sourceKey,
+            sourceLabel: source.sourceLabel,
+            spreadsheetId: source.spreadsheetId,
+            worksheetTitle,
+            rowKey,
+            rowNumber,
+            rawTeamName: normalized.teamName,
+            reason: warning,
+            severity: "warning",
+          });
+        }
+        if (warningReasons.length === 0) {
+          await clearRegistrationSyncIssue(rowKey);
+        }
+
         if (result.created) {
           imported += 1;
         }
 
-        if (result.updated) {
+        const teamSync = await syncImportedTeamFromSubmission(
+          result.submission,
+          "google-sheets-sync"
+        );
+
+        if (result.updated || teamSync.updated) {
           updated += 1;
           if (result.teamNameChanged) {
             teamNameChanges += 1;
@@ -669,11 +727,6 @@ async function syncSource(
           if (result.communityChanged) {
             communityChanges += 1;
           }
-
-          const teamSync = await syncImportedTeamFromSubmission(
-            result.submission,
-            "google-sheets-sync"
-          );
 
           if (teamSync.team && guild) {
             const setup = await ensureDiscordTeamSetup(
@@ -687,8 +740,8 @@ async function syncSource(
             if (setup.voiceAction === "created") channelsCreated += 1;
             if (setup.voiceAction === "renamed") channelsRenamed += 1;
           }
-        } else if (!result.created) {
-          const team = await getTeamBySubmissionId(result.submission.id);
+        } else {
+          const team = teamSync.team ?? (await getTeamBySubmissionId(result.submission.id));
           if (team && guild) {
             const setup = await ensureDiscordTeamSetup(
               guild,
@@ -715,6 +768,7 @@ async function syncSource(
           rowNumber,
           rawTeamName: readCell(row, teamNameIndex) || null,
           reason: error instanceof Error ? error.message : "Unknown row parse error.",
+          severity: "error",
         });
       }
     }
@@ -731,6 +785,7 @@ async function syncSource(
       lastImportedCount: imported,
       lastDuplicateCount: unchanged,
       lastInvalidCount: invalid,
+      lastWarningCount: warnings,
       lastSummaryJson: JSON.stringify({
         teamsCreated: imported,
         teamsUpdated: updated,
@@ -740,6 +795,8 @@ async function syncSource(
         discordRolesRenamed: rolesRenamed,
         discordChannelsCreated: channelsCreated,
         discordChannelsRenamed: channelsRenamed,
+        warnings,
+        blockingErrors: invalid,
         instanceAssignmentsChanged: 0,
       }),
       lastError: null,
@@ -751,6 +808,8 @@ async function syncSource(
       duplicates: unchanged,
       invalid,
       details: [
+        `warnings=${warnings}`,
+        `blocking_errors=${invalid}`,
         `teams_updated=${updated}`,
         `team_name_changes=${teamNameChanges}`,
         `community_changes=${communityChanges}`,
@@ -777,6 +836,7 @@ async function syncSource(
       lastImportedCount: 0,
       lastDuplicateCount: 0,
       lastInvalidCount: 0,
+      lastWarningCount: 0,
       lastSummaryJson: null,
       lastError: message,
     });

@@ -429,44 +429,146 @@ export async function syncImportedTeamFromSubmission(
 }> {
   await ensureTeamTables();
 
-  if (!submission.importedTeamId) {
-    return {
-      team: null,
-      updated: false,
-      teamNameChanged: false,
-      communityChanged: false,
-      previousTeamName: null,
-    };
-  }
-
-  const existing = await loadTeamById(submission.importedTeamId);
-
-  if (!existing) {
-    return {
-      team: null,
-      updated: false,
-      teamNameChanged: false,
-      communityChanged: false,
-      previousTeamName: null,
-    };
-  }
+  const existingBySubmission = submission.importedTeamId
+    ? await loadTeamById(submission.importedTeamId)
+    : await getTeamBySubmissionId(submission.id);
+  const existingByName = existingBySubmission
+    ? null
+    : await prisma.team.findFirst({
+        where: { teamName: submission.teamName },
+        include: {
+          members: {
+            orderBy: { sortOrder: "asc" },
+          },
+        },
+      });
+  const existing = existingBySubmission ?? (existingByName ? mapTeam(existingByName) : null);
 
   const payload = buildTeamPayload(submission);
-  const teamNameChanged = existing.teamName !== submission.teamName;
-  const communityChanged =
-    (existing.discordCommunity?.trim() || null) !==
-    (submission.discordCommunity?.trim() || null);
-  const needsUpdate =
+  const teamNameChanged = Boolean(existing && existing.teamName !== submission.teamName);
+  const communityChanged = Boolean(
+    existing &&
+      (existing.discordCommunity?.trim() || null) !==
+        (submission.discordCommunity?.trim() || null)
+  );
+  const needsTeamUpdate =
+    !existing ||
     teamNameChanged ||
     communityChanged ||
     existing.captainName !== payload.captainName ||
     JSON.stringify(existing.playerNames) !== payload.playerNames ||
     existing.substituteName !== payload.substituteName ||
-    existing.leaderDiscordUserId !== payload.leaderDiscordUserId;
+    existing.leaderDiscordUserId !== payload.leaderDiscordUserId ||
+    existing.importedFromSubmissionId !== submission.id;
 
-  if (!needsUpdate) {
+  const existingMembers = existing
+    ? existing.members.map((member) => ({
+        displayName: member.displayName,
+        discordUserId: member.discordUserId ?? null,
+        embarkId: member.embarkId ?? null,
+        isLeader: member.isLeader,
+        sortOrder: member.sortOrder,
+      }))
+    : [];
+  const incomingMembers = submission.players.map((player) => ({
+    displayName: player.displayName,
+    discordUserId: player.discordUserId ?? null,
+    embarkId: player.embarkId,
+    isLeader: player.isLeader,
+    sortOrder: player.sortOrder,
+  }));
+  const needsMembersUpdate =
+    !existing || JSON.stringify(existingMembers) !== JSON.stringify(incomingMembers);
+
+  const persisted = await prisma.$transaction(async (tx: any) => {
+    const upserted = existing
+      ? needsTeamUpdate
+        ? await tx.team.update({
+            where: { id: existing.id },
+            data: {
+              teamName: submission.teamName,
+              ...payload,
+              importedFromSubmissionId: submission.id,
+            },
+            include: {
+              members: {
+                orderBy: { sortOrder: "asc" },
+              },
+            },
+          })
+        : await tx.team.findUniqueOrThrow({
+            where: { id: existing.id },
+            include: {
+              members: {
+                orderBy: { sortOrder: "asc" },
+              },
+            },
+          })
+      : await tx.team.create({
+          data: {
+            teamName: submission.teamName,
+            ...payload,
+            importedFromSubmissionId: submission.id,
+          },
+          include: {
+            members: {
+              orderBy: { sortOrder: "asc" },
+            },
+          },
+        });
+
+    if (needsMembersUpdate) {
+      await tx.teamMember.deleteMany({
+        where: { teamId: upserted.id },
+      });
+      await tx.teamMember.createMany({
+        data: submission.players.map((player) => ({
+          teamId: upserted.id,
+          displayName: player.displayName,
+          discordUserId: player.discordUserId ?? null,
+          embarkId: player.embarkId,
+          isLeader: player.isLeader,
+          sortOrder: player.sortOrder,
+        })),
+      });
+    }
+
+    return tx.team.findUniqueOrThrow({
+      where: { id: upserted.id },
+      include: {
+        members: {
+          orderBy: { sortOrder: "asc" },
+        },
+      },
+    });
+  });
+
+  if (!existing || existing.importedFromSubmissionId !== submission.id || submission.importedTeamId !== persisted.id) {
+    await markRegistrationImported(submission.id, persisted.id, actorDiscordUserId);
+  }
+
+  if (!existing) {
+    await createAuditLog({
+      action: "team_imported_from_registration",
+      entityType: "team",
+      entityId: `${persisted.id}`,
+      summary: `Imported ${persisted.teamName} into the live team table.`,
+      details: `Submission ${submission.id}.${submission.discordCommunity ? ` Community: ${submission.discordCommunity}.` : ""}`,
+      actorDiscordUserId,
+    });
+
     return {
-      team: existing,
+      team: mapTeam(persisted),
+      updated: true,
+      teamNameChanged: false,
+      communityChanged: false,
+      previousTeamName: null,
+    };
+  }
+
+  if (!needsTeamUpdate && !needsMembersUpdate) {
+    return {
+      team: mapTeam(persisted),
       updated: false,
       teamNameChanged: false,
       communityChanged: false,
@@ -474,30 +576,17 @@ export async function syncImportedTeamFromSubmission(
     };
   }
 
-  const updated = await prisma.team.update({
-    where: { id: existing.id },
-    data: {
-      teamName: submission.teamName,
-      ...payload,
-      importedFromSubmissionId: submission.id,
-    },
-    include: {
-      members: {
-        orderBy: { sortOrder: "asc" },
-      },
-    },
-  });
-
   await createAuditLog({
     action: "team_synced_from_sheet",
     entityType: "team",
-    entityId: `${updated.id}`,
-    summary: `Synced imported team ${updated.teamName} from sheet.`,
+    entityId: `${persisted.id}`,
+    summary: `Synced imported team ${persisted.teamName} from sheet.`,
     details: [
       teamNameChanged ? `Renamed from "${existing.teamName}".` : null,
       communityChanged
-        ? `Community changed from "${existing.discordCommunity ?? "none"}" to "${updated.discordCommunity ?? "none"}".`
+        ? `Community changed from "${existing.discordCommunity ?? "none"}" to "${persisted.discordCommunity ?? "none"}".`
         : null,
+      needsMembersUpdate ? "Team members refreshed from submission." : null,
       "Tournament instance assignment was preserved.",
     ]
       .filter(Boolean)
@@ -506,7 +595,7 @@ export async function syncImportedTeamFromSubmission(
   });
 
   return {
-    team: mapTeam(updated),
+    team: mapTeam(persisted),
     updated: true,
     teamNameChanged,
     communityChanged,
