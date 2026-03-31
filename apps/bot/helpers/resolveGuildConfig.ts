@@ -1,5 +1,5 @@
 import type { Guild } from "discord.js";
-import { getGuildConfig, upsertGuildConfig } from "../db/guildConfig";
+import { getGuildConfig, upsertGuildConfig } from "../storage/guildConfig";
 
 function findRole(guild: Guild, name: string) {
   return guild.roles.cache.find(

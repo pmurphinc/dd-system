@@ -672,6 +672,8 @@ export async function handleTournamentInstanceButton(
           : assignment.teamId;
 
       const round3Played = draft.losingTeamFrp === 1;
+      const round3WinnerTeamId =
+        round3Played && typeof loserTeamId === "number" ? loserTeamId : undefined;
 
       await recordOfficialMatchResult({
         tournamentInstanceId: instanceId,
@@ -679,7 +681,7 @@ export async function handleTournamentInstanceButton(
         round1WinnerTeamId: winnerTeamId,
         round2WinnerTeamId: winnerTeamId,
         round3Played,
-        round3WinnerTeamId: round3Played ? loserTeamId : undefined,
+        round3WinnerTeamId,
         enteredByDiscordUserId: interaction.user.id,
       });
 

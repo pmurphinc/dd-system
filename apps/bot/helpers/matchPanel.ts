@@ -6,8 +6,8 @@ import {
   GuildMemberRoleManager,
 } from "discord.js";
 import { isFinalRoundReportingOpen } from "./tournamentAccess";
-import { getReportAssignment } from "../mocks/reportAssignment";
-import { getTournamentState } from "../mocks/tournamentState";
+import { getReportAssignment } from "../domain/reportAssignment";
+import { getTournamentState } from "../domain/tournamentState";
 
 export async function buildMatchPanel(
   userId: string,

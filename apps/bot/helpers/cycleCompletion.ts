@@ -1,4 +1,4 @@
-import { ReportAssignment } from "../mocks/reportAssignment";
+import { ReportAssignment } from "../domain/reportAssignment";
 import { StoredCycleResult } from "../storage/cycleResults";
 
 const FINAL_ROUND_STAGE_NAME = "Final Round";

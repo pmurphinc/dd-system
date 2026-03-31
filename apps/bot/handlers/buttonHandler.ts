@@ -24,14 +24,14 @@ import {
   getMatchAssignmentsForCycle,
   getMatchAssignmentsForCurrentStage,
   getReportAssignment,
-} from "../mocks/reportAssignment";
+} from "../domain/reportAssignment";
 import {
   getTournamentState,
   openCheckIn,
   resetTournamentState,
   setTournamentState,
   startTournamentCycle,
-} from "../mocks/tournamentState";
+} from "../domain/tournamentState";
 import {
   getRegistrationById,
   getRegistrationSummary,

@@ -4,7 +4,7 @@ import {
   ButtonStyle,
   EmbedBuilder,
 } from "discord.js";
-import { getTournamentState } from "../mocks/tournamentState";
+import { getTournamentState } from "../domain/tournamentState";
 
 export async function buildCheckinPanel() {
   const tournamentState = await getTournamentState();

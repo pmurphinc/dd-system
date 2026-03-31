@@ -255,9 +255,3 @@ export async function resetTournamentState(): Promise<TournamentStateSnapshot> {
   });
   return resetState;
 }
-
-export type MockTournamentState = TournamentStateSnapshot;
-export const getMockTournamentState = getTournamentState;
-export const setMockTournamentState = setTournamentState;
-export const advanceMockTournamentState = advanceTournamentState;
-export const resetMockTournamentState = resetTournamentState;

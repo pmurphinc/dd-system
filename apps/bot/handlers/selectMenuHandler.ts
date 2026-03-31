@@ -10,7 +10,7 @@ import {
 import { hasAdminInteractionAccess } from "../helpers/permissions";
 import { buildReviewPanel } from "../helpers/reviewPanel";
 import { buildTournamentPanel } from "../helpers/tournamentPanel";
-import { getMatchAssignmentById } from "../mocks/reportAssignment";
+import { getMatchAssignmentById } from "../domain/reportAssignment";
 import { setTeamPlacement, setTeamCheckInStatus } from "../storage/teams";
 import { getReportSubmissionById } from "../storage/reportSubmissions";
 import { handleTournamentInstanceSelectMenu } from "./tournamentInstanceInteractions";

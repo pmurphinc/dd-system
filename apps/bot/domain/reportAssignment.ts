@@ -228,6 +228,3 @@ export async function getMatchAssignmentById(
 
   return assignment ? mapMatchAssignment(assignment) : null;
 }
-
-export type MockReportAssignment = ReportAssignment;
-export const getMockReportAssignment = getReportAssignment;

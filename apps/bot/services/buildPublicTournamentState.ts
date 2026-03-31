@@ -1,5 +1,5 @@
 import { TournamentInstanceStatus } from "@prisma/client";
-import { getTournamentState } from "../mocks/tournamentState";
+import { getTournamentState } from "../domain/tournamentState";
 import { getStandings, getStandingsForTournamentInstance } from "../storage/standings";
 import {
   getTournamentInstanceById,
