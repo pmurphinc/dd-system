@@ -7,8 +7,8 @@ import {
   getMatchAssignmentById,
   getReportAssignment,
   replaceAssignmentsForStage,
-} from "../mocks/reportAssignment";
-import { getTournamentState } from "../mocks/tournamentState";
+} from "../domain/reportAssignment";
+import { getTournamentState } from "../domain/tournamentState";
 import {
   createRegistrationSubmission,
   getRegistrationById,

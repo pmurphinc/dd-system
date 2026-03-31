@@ -2,11 +2,11 @@ import {
   CycleCompletionStatus,
   getCycleCompletionStatus,
 } from "../helpers/cycleCompletion";
-import { getMatchAssignmentsForCycle } from "../mocks/reportAssignment";
+import { getMatchAssignmentsForCycle } from "../domain/reportAssignment";
 import {
   TournamentStateSnapshot,
   setTournamentState,
-} from "../mocks/tournamentState";
+} from "../domain/tournamentState";
 import { getCycleResultsForCycle } from "../storage/cycleResults";
 import { PrismaDbClient, prisma } from "../storage/prisma";
 import { pushTournamentWebhookUpdate } from "./tournamentWebhook";

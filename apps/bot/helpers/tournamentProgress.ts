@@ -1,6 +1,6 @@
 import { getCycleCompletionStatus } from "./cycleCompletion";
-import { getMatchAssignmentsForCycle } from "../mocks/reportAssignment";
-import { TournamentStateSnapshot } from "../mocks/tournamentState";
+import { getMatchAssignmentsForCycle } from "../domain/reportAssignment";
+import { TournamentStateSnapshot } from "../domain/tournamentState";
 import { getCycleResultsForCycle } from "../storage/cycleResults";
 
 export interface TournamentProgressSummary {

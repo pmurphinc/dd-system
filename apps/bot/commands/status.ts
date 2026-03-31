@@ -8,7 +8,7 @@ import {
 } from "discord.js";
 import { BotCommand } from "./types";
 import { getTournamentProgressSummary } from "../helpers/tournamentProgress";
-import { getTournamentState } from "../mocks/tournamentState";
+import { getTournamentState } from "../domain/tournamentState";
 import { getRegistrationSummary } from "../storage/registrations";
 import { getStandings } from "../storage/standings";
 

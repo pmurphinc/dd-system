@@ -40,6 +40,3 @@ export async function getTeamPanelData(
     checkInStatus: team.checkInStatus,
   };
 }
-
-export type MockTeamData = TeamPanelData;
-export const getMockTeamData = getTeamPanelData;
