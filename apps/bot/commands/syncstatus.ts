@@ -13,13 +13,41 @@ import {
   getRegistrationSyncConfig,
   isRegistrationSyncAuthConfigured,
 } from "../services/registrationSheetSync";
+import {
+  pushTournamentWebhookUpdate,
+  sendManualTournamentWebhookTestPayload,
+} from "../services/tournamentWebhook";
 
 export const syncstatusCommand: BotCommand = {
   data: new SlashCommandBuilder()
     .setName("syncstatus")
-    .setDescription("Shows Google Sheets registration sync status"),
+    .setDescription("Shows Google Sheets registration sync status")
+    .addBooleanOption((option) =>
+      option
+        .setName("push_tournament_webhook")
+        .setDescription("Also pushes the current public tournament state to the website")
+        .setRequired(false)
+    )
+    .addIntegerOption((option) =>
+      option
+        .setName("instance")
+        .setDescription("Optional tournament instance ID for manual website sync")
+        .setRequired(false)
+    )
+    .addBooleanOption((option) =>
+      option
+        .setName("manual_test_payload")
+        .setDescription("Send fixed validation payload to the tournament webhook endpoint")
+        .setRequired(false)
+    ),
 
   async execute(interaction: ChatInputCommandInteraction) {
+    const shouldPushWebhook =
+      interaction.options.getBoolean("push_tournament_webhook") ?? false;
+    const selectedInstanceId = interaction.options.getInteger("instance") ?? undefined;
+    const sendManualTestPayload =
+      interaction.options.getBoolean("manual_test_payload") ?? false;
+
     const [summary, sourceStates, issues] = await Promise.all([
       getRegistrationSummary(),
       listRegistrationSyncSourceStates(),
@@ -84,6 +112,18 @@ export const syncstatusCommand: BotCommand = {
       )
       .join("\n");
 
+    const syncResult = shouldPushWebhook
+      ? await pushTournamentWebhookUpdate({
+          guildId: interaction.inCachedGuild() ? interaction.guildId : undefined,
+          tournamentInstanceId: selectedInstanceId,
+          reason: "manual_syncstatus_command",
+          force: true,
+        })
+      : null;
+    const manualTestResult = sendManualTestPayload
+      ? await sendManualTournamentWebhookTestPayload()
+      : null;
+
     const embed = new EmbedBuilder()
       .setTitle("Registration Sync Status")
       .addFields(
@@ -127,6 +167,20 @@ export const syncstatusCommand: BotCommand = {
         {
           name: "Recent Warnings",
           value: (warningSummary || "No recent warnings.").slice(0, 1024),
+          inline: false,
+        },
+        {
+          name: "Tournament Website Webhook",
+          value: !shouldPushWebhook
+            ? "Not triggered in this run. Set `push_tournament_webhook=true` to manually sync."
+            : `Triggered: ${syncResult?.sent ? "yes" : "no"} | reason: ${syncResult?.reason ?? "unknown"}`,
+          inline: false,
+        },
+        {
+          name: "Webhook Manual Test Payload",
+          value: !sendManualTestPayload
+            ? "Not sent in this run. Set `manual_test_payload=true` to send a fixed validation payload."
+            : `Triggered: ${manualTestResult?.sent ? "yes" : "no"} | response: ${manualTestResult?.responseStatusCode ?? "n/a"} | reason: ${manualTestResult?.reason ?? "unknown"}`,
           inline: false,
         }
       );

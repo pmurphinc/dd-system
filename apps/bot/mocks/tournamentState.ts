@@ -2,6 +2,7 @@ import { PrismaDbClient, prisma } from "../storage/prisma";
 import { getPlacedTeams } from "../storage/teams";
 import { createAuditLog } from "../storage/auditLog";
 import { ensureAssignmentsForStage } from "./reportAssignment";
+import { pushTournamentWebhookUpdate } from "../services/tournamentWebhook";
 
 export interface TournamentStateSnapshot {
   tournamentStatus: string;
@@ -126,7 +127,11 @@ export async function setTournamentState(
     },
   });
 
-  return syncTournamentTeamCounts(mapTournamentState(updatedRecord), db);
+  const synced = await syncTournamentTeamCounts(mapTournamentState(updatedRecord), db);
+  await pushTournamentWebhookUpdate({
+    reason: "legacy_state_updated",
+  });
+  return synced;
 }
 
 export async function incrementCheckedInTeams(): Promise<TournamentStateSnapshot> {
@@ -244,7 +249,11 @@ export async function resetTournamentState(): Promise<TournamentStateSnapshot> {
     },
   });
 
-  return mapTournamentState(reset);
+  const resetState = mapTournamentState(reset);
+  await pushTournamentWebhookUpdate({
+    reason: "legacy_state_reset",
+  });
+  return resetState;
 }
 
 export type MockTournamentState = TournamentStateSnapshot;
