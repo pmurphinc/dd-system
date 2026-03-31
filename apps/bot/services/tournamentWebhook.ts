@@ -62,12 +62,7 @@ async function sendWebhookRequest(
   url: string,
   secret: string,
   payload: PublicTournamentStatePayload
-): Promise<{
-  ok: boolean;
-  statusCode: number | null;
-  error?: unknown;
-  responseBody?: string;
-}> {
+): Promise<{ ok: boolean; statusCode: number | null; error?: unknown }> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
@@ -85,7 +80,6 @@ async function sendWebhookRequest(
     return {
       ok: response.ok,
       statusCode: response.status,
-      responseBody: await response.text(),
     };
   } catch (error) {
     return {
@@ -100,48 +94,21 @@ async function sendWebhookRequest(
 
 function logDeliveryResult(
   payload: PublicTournamentStatePayload,
-  result: {
-    ok: boolean;
-    statusCode: number | null;
-    error?: unknown;
-    responseBody?: string;
-  },
+  result: { ok: boolean; statusCode: number | null; error?: unknown },
   reason?: string
 ) {
-  const payloadPreview = JSON.stringify({
-    eventWinner: payload.eventWinner,
-    status: payload.status,
-    currentLeader: payload.currentLeader,
-    updatedAt: payload.updatedAt,
-    tournamentId: payload.tournamentId,
-    cycle: payload.cycle,
-    isComplete: payload.isComplete,
-  });
-  const context = `status="${payload.status}" leader="${payload.currentLeader ?? "-"}" winner="${payload.eventWinner ?? "-"}" cycle="${payload.cycle}" tournamentId="${payload.tournamentId}" payload=${payloadPreview}`;
+  const context = `status="${payload.status}" leader="${payload.currentLeader ?? "-"}" winner="${payload.eventWinner ?? "-"}" cycle="${payload.cycle ?? "-"}"`;
 
   if (result.ok) {
     console.log(
-      `[tournament-webhook] sent (${reason ?? "state_change"}) ${context} response=${result.statusCode ?? "n/a"} body=${result.responseBody ?? ""}`
+      `[tournament-webhook] sent (${reason ?? "state_change"}) ${context} response=${result.statusCode ?? "n/a"}`
     );
     return;
   }
 
   console.warn(
-    `[tournament-webhook] failed (${reason ?? "state_change"}) ${context} response=${result.statusCode ?? "n/a"} error=${result.error instanceof Error ? result.error.message : "unknown"} body=${result.responseBody ?? ""}`
+    `[tournament-webhook] failed (${reason ?? "state_change"}) ${context} response=${result.statusCode ?? "n/a"} error=${result.error instanceof Error ? result.error.message : "unknown"}`
   );
-}
-
-function buildTieLeaderFallbackPayload(
-  payload: PublicTournamentStatePayload
-): PublicTournamentStatePayload | null {
-  if (!payload.currentLeader || !payload.currentLeader.includes("(Tie)")) {
-    return null;
-  }
-
-  return {
-    ...payload,
-    currentLeader: null,
-  };
 }
 
 export async function pushTournamentWebhookUpdate(input?: {
@@ -189,65 +156,6 @@ export async function pushTournamentWebhookUpdate(input?: {
     return { sent: false, reason: "request_failed", payload };
   }
 
-  if (firstAttempt.statusCode === 400) {
-    const tieFallbackPayload = buildTieLeaderFallbackPayload(payload);
-    if (tieFallbackPayload) {
-      const tieRetry = await sendWebhookRequest(
-        config.url,
-        config.secret,
-        tieFallbackPayload
-      );
-
-      if (tieRetry.ok) {
-        lastPayloadHash = getPayloadHash(tieFallbackPayload);
-        logDeliveryResult(tieFallbackPayload, tieRetry, `${input?.reason ?? "state_change"}:tie_leader_fallback`);
-        return { sent: true, reason: "ok_after_tie_fallback", payload: tieFallbackPayload };
-      }
-
-      logDeliveryResult(tieFallbackPayload, tieRetry, `${input?.reason ?? "state_change"}:tie_leader_fallback_failed`);
-      return { sent: false, reason: "request_failed", payload: tieFallbackPayload };
-    }
-  }
-
   logDeliveryResult(payload, firstAttempt, input?.reason);
   return { sent: false, reason: "request_failed", payload };
-}
-
-export async function sendManualTournamentWebhookTestPayload(): Promise<{
-  sent: boolean;
-  reason: string;
-  payload: PublicTournamentStatePayload;
-  responseStatusCode: number | null;
-  responseBody?: string;
-}> {
-  const config = getWebhookConfig();
-  const payload: PublicTournamentStatePayload = {
-    eventWinner: null,
-    status: "Registration Open",
-    currentLeader: null,
-    updatedAt: new Date().toISOString(),
-    tournamentId: "manual-test",
-    cycle: 0,
-    isComplete: false,
-  };
-
-  if (!config) {
-    return {
-      sent: false,
-      reason: "missing_webhook_config",
-      payload,
-      responseStatusCode: null,
-    };
-  }
-
-  const response = await sendWebhookRequest(config.url, config.secret, payload);
-  logDeliveryResult(payload, response, "manual_test_payload");
-
-  return {
-    sent: response.ok,
-    reason: response.ok ? "ok" : "request_failed",
-    payload,
-    responseStatusCode: response.statusCode,
-    responseBody: response.responseBody,
-  };
 }

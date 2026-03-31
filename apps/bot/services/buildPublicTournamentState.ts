@@ -12,7 +12,7 @@ export interface PublicTournamentStatePayload {
   currentLeader: string | null;
   updatedAt: string;
   tournamentId: string;
-  cycle: number;
+  cycle: number | null;
   isComplete: boolean;
 }
 
@@ -50,27 +50,8 @@ function resolveLeaderName(
     return leaders[0]?.teamName ?? null;
   }
 
-  return null;
-}
-
-function normalizeCycleForPublicStatus(
-  cycle: number | null | undefined,
-  status: string
-): number {
-  if (status === "Registration Open" || status === "Check-In Open") {
-    return 0;
-  }
-
-  if (typeof cycle !== "number" || !Number.isFinite(cycle) || cycle < 0) {
-    return 0;
-  }
-
-  return cycle;
-}
-
-function normalizeTournamentId(rawId: string | null | undefined): string {
-  const value = `${rawId ?? ""}`.trim();
-  return value.length > 0 ? value : "default";
+  if (leaders.length === 0) return null;
+  return `${leaders.map((entry) => entry.teamName).join(", ")} (Tie)`;
 }
 
 export async function buildPublicTournamentState(input?: {
@@ -106,15 +87,14 @@ export async function buildPublicTournamentState(input?: {
     const updatedAt = new Date(
       Math.max(instance.updatedAt.getTime(), latestStandingUpdate ?? 0)
     );
-    const status = mapInstanceStatus(instance.status, instance.currentCycle);
 
     return {
       eventWinner: winner,
-      status,
+      status: mapInstanceStatus(instance.status, instance.currentCycle),
       currentLeader: leader,
       updatedAt: updatedAt.toISOString(),
-      tournamentId: normalizeTournamentId(`${instance.id}`),
-      cycle: normalizeCycleForPublicStatus(instance.currentCycle, status),
+      tournamentId: `${instance.id}`,
+      cycle: instance.currentCycle,
       isComplete: instance.status === TournamentInstanceStatus.COMPLETED,
     };
   }
@@ -126,15 +106,13 @@ export async function buildPublicTournamentState(input?: {
     .map((standing) => standing.updatedAt.getTime())
     .sort((left, right) => right - left)[0];
 
-  const status = mapLegacyStatus(legacyState.tournamentStatus, legacyState.currentCycle);
-
   return {
     eventWinner: winner,
-    status,
+    status: mapLegacyStatus(legacyState.tournamentStatus, legacyState.currentCycle),
     currentLeader: leader,
     updatedAt: new Date(latestStandingUpdate ?? 0).toISOString(),
-    tournamentId: "legacy",
-    cycle: normalizeCycleForPublicStatus(legacyState.currentCycle, status),
+    tournamentId: "legacy-1",
+    cycle: legacyState.currentCycle,
     isComplete: legacyState.tournamentStatus === "Completed",
   };
 }
