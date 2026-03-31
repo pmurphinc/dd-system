@@ -90,9 +90,21 @@ function formatScreenshots(submission: StoredRegistrationSubmission | null): str
     return "-";
   }
 
-  const screenshotLines = submission.players
-    .filter((player) => player.screenshotLink.trim())
-    .map((player) => `${player.displayName}: ${player.screenshotLink}`);
+  const orderedRoster = getOrderedRoster(submission);
+  const screenshotLines = orderedRoster.map((player, index) => {
+    const roleLabel =
+      player.isLeader
+        ? "Leader"
+        : player.sortOrder >= 4
+          ? "Substitute"
+          : `Player ${index + 1}`;
+    const rawValue = player.screenshotLink.trim();
+    const status = rawValue ? "Screenshot provided" : "Screenshot missing";
+
+    return rawValue
+      ? `${roleLabel} (${player.displayName}): ${status}\n${rawValue}`
+      : `${roleLabel} (${player.displayName}): ${status}`;
+  });
 
   return screenshotLines.length > 0
     ? truncateValue(screenshotLines.join("\n"))

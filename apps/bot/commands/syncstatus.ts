@@ -25,6 +25,9 @@ export const syncstatusCommand: BotCommand = {
       listRegistrationSyncSourceStates(),
       listRecentRegistrationSyncIssues(5),
     ]);
+    const actionableIssues = issues.filter(
+      (issue) => !issue.reason.toLowerCase().includes("missing access")
+    );
     const config = getRegistrationSyncConfig();
     const stateByKey = new Map(sourceStates.map((state) => [state.sourceKey, state]));
     const sourceSummary = config.sources

@@ -140,21 +140,7 @@ function readCell(row: string[], index: number | undefined): string {
 }
 
 function normalizeLinkCell(value: string): string {
-  const trimmed = value.trim();
-
-  if (!trimmed) {
-    return "";
-  }
-
-  const urls = trimmed.match(/https?:\/\/\S+/gi) ?? [];
-
-  if (urls.length > 0) {
-    return Array.from(
-      new Set(urls.map((url) => url.replace(/[),.;]+$/g, "")))
-    ).join("\n");
-  }
-
-  return trimmed;
+  return value.trim();
 }
 
 function inferOrderFromHeader(header: string): number {
