@@ -65,7 +65,7 @@ export const syncstatusCommand: BotCommand = {
         ].join("\n");
       })
       .join("\n\n");
-    const warningSummary = actionableIssues
+    const warningSummary = issues
       .filter((issue) => issue.severity === "warning")
       .map(
         (issue) =>
@@ -74,7 +74,7 @@ export const syncstatusCommand: BotCommand = {
           }`
       )
       .join("\n");
-    const errorSummary = actionableIssues
+    const errorSummary = issues
       .filter((issue) => issue.severity === "error")
       .map(
         (issue) =>
