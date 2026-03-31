@@ -13,9 +13,11 @@ export interface RegistrationSyncSourceStateRow {
   lastImportedCount: number;
   lastDuplicateCount: number;
   lastInvalidCount: number;
+  lastWarningCount: number;
   totalImportedCount: number;
   totalDuplicateCount: number;
   totalInvalidCount: number;
+  totalWarningCount: number;
   lastSummaryJson: string | null;
   lastError: string | null;
   updatedAt: Date;
@@ -31,6 +33,7 @@ export interface RegistrationSyncIssueRow {
   rowNumber: number;
   rawTeamName: string | null;
   reason: string;
+  severity: "warning" | "error";
   createdAt: Date;
   updatedAt: Date;
 }
@@ -66,9 +69,11 @@ async function ensureRegistrationSyncTables(): Promise<void> {
         "lastImportedCount" INTEGER NOT NULL DEFAULT 0,
         "lastDuplicateCount" INTEGER NOT NULL DEFAULT 0,
         "lastInvalidCount" INTEGER NOT NULL DEFAULT 0,
+        "lastWarningCount" INTEGER NOT NULL DEFAULT 0,
         "totalImportedCount" INTEGER NOT NULL DEFAULT 0,
         "totalDuplicateCount" INTEGER NOT NULL DEFAULT 0,
         "totalInvalidCount" INTEGER NOT NULL DEFAULT 0,
+        "totalWarningCount" INTEGER NOT NULL DEFAULT 0,
         "lastSummaryJson" TEXT,
         "lastError" TEXT,
         "updatedAt" DATETIME NOT NULL
@@ -117,6 +122,11 @@ async function ensureRegistrationSyncTables(): Promise<void> {
     );
     await ensureColumn(
       "RegistrationSyncSourceState",
+      "lastWarningCount",
+      `ALTER TABLE "RegistrationSyncSourceState" ADD COLUMN "lastWarningCount" INTEGER NOT NULL DEFAULT 0`
+    );
+    await ensureColumn(
+      "RegistrationSyncSourceState",
       "totalImportedCount",
       `ALTER TABLE "RegistrationSyncSourceState" ADD COLUMN "totalImportedCount" INTEGER NOT NULL DEFAULT 0`
     );
@@ -129,6 +139,11 @@ async function ensureRegistrationSyncTables(): Promise<void> {
       "RegistrationSyncSourceState",
       "totalInvalidCount",
       `ALTER TABLE "RegistrationSyncSourceState" ADD COLUMN "totalInvalidCount" INTEGER NOT NULL DEFAULT 0`
+    );
+    await ensureColumn(
+      "RegistrationSyncSourceState",
+      "totalWarningCount",
+      `ALTER TABLE "RegistrationSyncSourceState" ADD COLUMN "totalWarningCount" INTEGER NOT NULL DEFAULT 0`
     );
     await ensureColumn(
       "RegistrationSyncSourceState",
@@ -157,6 +172,7 @@ async function ensureRegistrationSyncTables(): Promise<void> {
         "rowNumber" INTEGER NOT NULL,
         "rawTeamName" TEXT,
         "reason" TEXT NOT NULL,
+        "severity" TEXT NOT NULL DEFAULT 'error',
         "createdAt" DATETIME NOT NULL,
         "updatedAt" DATETIME NOT NULL
       )
@@ -171,6 +187,11 @@ async function ensureRegistrationSyncTables(): Promise<void> {
       "RegistrationSyncIssue",
       "rawTeamName",
       `ALTER TABLE "RegistrationSyncIssue" ADD COLUMN "rawTeamName" TEXT`
+    );
+    await ensureColumn(
+      "RegistrationSyncIssue",
+      "severity",
+      `ALTER TABLE "RegistrationSyncIssue" ADD COLUMN "severity" TEXT NOT NULL DEFAULT 'error'`
     );
     await ensureColumn(
       "RegistrationSyncIssue",
@@ -199,6 +220,7 @@ export async function upsertRegistrationSyncSourceState(input: {
   lastImportedCount: number;
   lastDuplicateCount: number;
   lastInvalidCount: number;
+  lastWarningCount?: number;
   lastSummaryJson?: string | null;
   lastError?: string | null;
 }): Promise<void> {
@@ -219,14 +241,16 @@ export async function upsertRegistrationSyncSourceState(input: {
     (current?.totalDuplicateCount ?? 0) + input.lastDuplicateCount;
   const totalInvalidCount =
     (current?.totalInvalidCount ?? 0) + input.lastInvalidCount;
+  const totalWarningCount =
+    (current?.totalWarningCount ?? 0) + (input.lastWarningCount ?? 0);
 
   if (current) {
     await prisma.$executeRawUnsafe(
       `UPDATE "RegistrationSyncSourceState"
        SET "sourceLabel" = ?, "spreadsheetId" = ?, "worksheetTitle" = ?, "lastResolvedRange" = ?,
            "enabled" = ?, "lastCheckedAt" = ?, "lastSuccessfulSyncAt" = ?, "lastImportedCount" = ?,
-           "lastDuplicateCount" = ?, "lastInvalidCount" = ?, "totalImportedCount" = ?,
-           "totalDuplicateCount" = ?, "totalInvalidCount" = ?, "lastSummaryJson" = ?, "lastError" = ?, "updatedAt" = ?
+           "lastDuplicateCount" = ?, "lastInvalidCount" = ?, "lastWarningCount" = ?, "totalImportedCount" = ?,
+           "totalDuplicateCount" = ?, "totalInvalidCount" = ?, "totalWarningCount" = ?, "lastSummaryJson" = ?, "lastError" = ?, "updatedAt" = ?
        WHERE "sourceKey" = ?`,
       input.sourceLabel,
       input.spreadsheetId,
@@ -238,9 +262,11 @@ export async function upsertRegistrationSyncSourceState(input: {
       input.lastImportedCount,
       input.lastDuplicateCount,
       input.lastInvalidCount,
+      input.lastWarningCount ?? 0,
       totalImportedCount,
       totalDuplicateCount,
       totalInvalidCount,
+      totalWarningCount,
       input.lastSummaryJson ?? null,
       input.lastError ?? null,
       now,
@@ -253,9 +279,9 @@ export async function upsertRegistrationSyncSourceState(input: {
     `INSERT INTO "RegistrationSyncSourceState" (
       "sourceKey", "sourceLabel", "spreadsheetId", "worksheetTitle", "lastResolvedRange",
       "enabled", "lastCheckedAt", "lastSuccessfulSyncAt", "lastImportedCount",
-      "lastDuplicateCount", "lastInvalidCount", "totalImportedCount", "totalDuplicateCount",
-      "totalInvalidCount", "lastSummaryJson", "lastError", "updatedAt"
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      "lastDuplicateCount", "lastInvalidCount", "lastWarningCount", "totalImportedCount", "totalDuplicateCount",
+      "totalInvalidCount", "totalWarningCount", "lastSummaryJson", "lastError", "updatedAt"
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     input.sourceKey,
     input.sourceLabel,
     input.spreadsheetId,
@@ -267,9 +293,11 @@ export async function upsertRegistrationSyncSourceState(input: {
     input.lastImportedCount,
     input.lastDuplicateCount,
     input.lastInvalidCount,
+    input.lastWarningCount ?? 0,
     input.lastImportedCount,
     input.lastDuplicateCount,
     input.lastInvalidCount,
+    input.lastWarningCount ?? 0,
     input.lastSummaryJson ?? null,
     input.lastError ?? null,
     now
@@ -285,34 +313,60 @@ export async function recordRegistrationSyncIssue(input: {
   rowNumber: number;
   rawTeamName?: string | null;
   reason: string;
+  severity?: "warning" | "error";
 }): Promise<void> {
   await ensureRegistrationSyncTables();
 
   const now = new Date();
-  await prisma.registrationSyncIssue.upsert({
-    where: { rowKey: input.rowKey },
-    update: {
-      sourceLabel: input.sourceLabel,
-      spreadsheetId: input.spreadsheetId,
-      worksheetTitle: input.worksheetTitle ?? null,
-      rowNumber: input.rowNumber,
-      rawTeamName: input.rawTeamName ?? null,
-      reason: input.reason,
-      updatedAt: now,
-    },
-    create: {
-      sourceKey: input.sourceKey,
-      sourceLabel: input.sourceLabel,
-      spreadsheetId: input.spreadsheetId,
-      worksheetTitle: input.worksheetTitle ?? null,
-      rowKey: input.rowKey,
-      rowNumber: input.rowNumber,
-      rawTeamName: input.rawTeamName ?? null,
-      reason: input.reason,
-      createdAt: now,
-      updatedAt: now,
-    },
-  });
+  const existing = (await prisma.$queryRawUnsafe(
+    `SELECT "id" FROM "RegistrationSyncIssue" WHERE "rowKey" = ? LIMIT 1`,
+    input.rowKey
+  )) as Array<{ id: number }>;
+
+  if (existing[0]) {
+    await prisma.$executeRawUnsafe(
+      `UPDATE "RegistrationSyncIssue"
+       SET "sourceLabel" = ?, "spreadsheetId" = ?, "worksheetTitle" = ?, "rowNumber" = ?,
+           "rawTeamName" = ?, "reason" = ?, "severity" = ?, "updatedAt" = ?
+       WHERE "rowKey" = ?`,
+      input.sourceLabel,
+      input.spreadsheetId,
+      input.worksheetTitle ?? null,
+      input.rowNumber,
+      input.rawTeamName ?? null,
+      input.reason,
+      input.severity ?? "error",
+      now,
+      input.rowKey
+    );
+    return;
+  }
+
+  await prisma.$executeRawUnsafe(
+    `INSERT INTO "RegistrationSyncIssue" (
+      "sourceKey", "sourceLabel", "spreadsheetId", "worksheetTitle", "rowKey",
+      "rowNumber", "rawTeamName", "reason", "severity", "createdAt", "updatedAt"
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    input.sourceKey,
+    input.sourceLabel,
+    input.spreadsheetId,
+    input.worksheetTitle ?? null,
+    input.rowKey,
+    input.rowNumber,
+    input.rawTeamName ?? null,
+    input.reason,
+    input.severity ?? "error",
+    now,
+    now
+  );
+}
+
+export async function clearRegistrationSyncIssue(rowKey: string): Promise<void> {
+  await ensureRegistrationSyncTables();
+  await prisma.$executeRawUnsafe(
+    `DELETE FROM "RegistrationSyncIssue" WHERE "rowKey" = ?`,
+    rowKey
+  );
 }
 
 export async function listRegistrationSyncSourceStates(): Promise<
@@ -330,10 +384,10 @@ export async function listRecentRegistrationSyncIssues(
 ): Promise<RegistrationSyncIssueRow[]> {
   await ensureRegistrationSyncTables();
 
-  return prisma.registrationSyncIssue.findMany({
-    orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
-    take: limit,
-  });
+  return (await prisma.$queryRawUnsafe(
+    `SELECT * FROM "RegistrationSyncIssue" ORDER BY "updatedAt" DESC, "id" DESC LIMIT ?`,
+    limit
+  )) as RegistrationSyncIssueRow[];
 }
 
 export async function logRegistrationSyncPollStart(

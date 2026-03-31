@@ -25,6 +25,9 @@ export const syncstatusCommand: BotCommand = {
       listRegistrationSyncSourceStates(),
       listRecentRegistrationSyncIssues(5),
     ]);
+    const actionableIssues = issues.filter(
+      (issue) => !issue.reason.toLowerCase().includes("missing access")
+    );
     const config = getRegistrationSyncConfig();
     const stateByKey = new Map(sourceStates.map((state) => [state.sourceKey, state]));
     const sourceSummary = config.sources
@@ -43,6 +46,7 @@ export const syncstatusCommand: BotCommand = {
               `Teams +${parsedSummary.teamsCreated ?? 0} / updated ${parsedSummary.teamsUpdated ?? 0}`,
               `Name changes ${parsedSummary.teamNameChanges ?? 0}`,
               `Community changes ${parsedSummary.communityMetadataChanges ?? 0}`,
+              `Warnings ${parsedSummary.warnings ?? 0}, blocking errors ${parsedSummary.blockingErrors ?? 0}`,
               `Roles created ${parsedSummary.discordRolesCreated ?? 0}, renamed ${parsedSummary.discordRolesRenamed ?? 0}`,
               `Channels created ${parsedSummary.discordChannelsCreated ?? 0}, renamed ${parsedSummary.discordChannelsRenamed ?? 0}`,
               "Tournament instance assignments changed: 0 (admin-controlled only)",
@@ -55,23 +59,30 @@ export const syncstatusCommand: BotCommand = {
           `Configured Tab: ${source.worksheetTitle ?? "auto"}`,
           `Resolved Range: ${state?.lastResolvedRange ?? "not resolved yet"}`,
           `Last success: ${state?.lastSuccessfulSyncAt?.toISOString() ?? "never"}`,
-          `Last run: +${state?.lastImportedCount ?? 0} / =${state?.lastDuplicateCount ?? 0} / !${state?.lastInvalidCount ?? 0}`,
+          `Last run: +${state?.lastImportedCount ?? 0} / =${state?.lastDuplicateCount ?? 0} / errors ${state?.lastInvalidCount ?? 0} / warnings ${state?.lastWarningCount ?? 0}`,
           detailedLine,
           `Last error: ${state?.lastError ?? "none"}`,
         ].join("\n");
       })
       .join("\n\n");
-    const issueSummary =
-      issues.length > 0
-        ? issues
-            .map(
-              (issue) =>
-                `${issue.sourceLabel} row ${issue.rowNumber}: ${issue.reason}${
-                  issue.rawTeamName ? ` (${issue.rawTeamName})` : ""
-                }`
-            )
-            .join("\n")
-        : "No recent validation issues.";
+    const warningSummary = actionableIssues
+      .filter((issue) => issue.severity === "warning")
+      .map(
+        (issue) =>
+          `${issue.sourceLabel} row ${issue.rowNumber}: ${issue.reason}${
+            issue.rawTeamName ? ` (${issue.rawTeamName})` : ""
+          }`
+      )
+      .join("\n");
+    const errorSummary = actionableIssues
+      .filter((issue) => issue.severity === "error")
+      .map(
+        (issue) =>
+          `${issue.sourceLabel} row ${issue.rowNumber}: ${issue.reason}${
+            issue.rawTeamName ? ` (${issue.rawTeamName})` : ""
+          }`
+      )
+      .join("\n");
 
     const embed = new EmbedBuilder()
       .setTitle("Registration Sync Status")
@@ -109,8 +120,13 @@ export const syncstatusCommand: BotCommand = {
           inline: false,
         },
         {
-          name: "Recent Invalid Rows",
-          value: issueSummary.slice(0, 1024),
+          name: "Recent Blocking Errors",
+          value: (errorSummary || "No recent blocking row errors.").slice(0, 1024),
+          inline: false,
+        },
+        {
+          name: "Recent Warnings",
+          value: (warningSummary || "No recent warnings.").slice(0, 1024),
           inline: false,
         }
       );

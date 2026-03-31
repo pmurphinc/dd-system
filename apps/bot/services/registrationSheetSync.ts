@@ -134,21 +134,7 @@ function readCell(row: string[], index: number | undefined): string {
 }
 
 function normalizeLinkCell(value: string): string {
-  const trimmed = value.trim();
-
-  if (!trimmed) {
-    return "";
-  }
-
-  const urls = trimmed.match(/https?:\/\/\S+/gi) ?? [];
-
-  if (urls.length > 0) {
-    return Array.from(
-      new Set(urls.map((url) => url.replace(/[),.;]+$/g, "")))
-    ).join("\n");
-  }
-
-  return trimmed;
+  return value.trim();
 }
 
 function inferOrderFromHeader(header: string): number {
@@ -638,7 +624,6 @@ async function syncSource(
           row,
           rowNumber
         );
-
         const result = await syncRegistrationSubmissionFromSourceRow({
           teamName: normalized.teamName,
           leaderDiscordUserId: normalized.leaderDiscordIdentifier,
@@ -661,7 +646,12 @@ async function syncSource(
           imported += 1;
         }
 
-        if (result.updated) {
+        const teamSync = await syncImportedTeamFromSubmission(
+          result.submission,
+          "google-sheets-sync"
+        );
+
+        if (result.updated || teamSync.updated) {
           updated += 1;
           if (result.teamNameChanged) {
             teamNameChanges += 1;
@@ -669,11 +659,6 @@ async function syncSource(
           if (result.communityChanged) {
             communityChanges += 1;
           }
-
-          const teamSync = await syncImportedTeamFromSubmission(
-            result.submission,
-            "google-sheets-sync"
-          );
 
           if (teamSync.team && guild) {
             const setup = await ensureDiscordTeamSetup(
@@ -687,8 +672,8 @@ async function syncSource(
             if (setup.voiceAction === "created") channelsCreated += 1;
             if (setup.voiceAction === "renamed") channelsRenamed += 1;
           }
-        } else if (!result.created) {
-          const team = await getTeamBySubmissionId(result.submission.id);
+        } else {
+          const team = teamSync.team ?? (await getTeamBySubmissionId(result.submission.id));
           if (team && guild) {
             const setup = await ensureDiscordTeamSetup(
               guild,
@@ -715,6 +700,7 @@ async function syncSource(
           rowNumber,
           rawTeamName: readCell(row, teamNameIndex) || null,
           reason: error instanceof Error ? error.message : "Unknown row parse error.",
+          severity: "error",
         });
       }
     }
@@ -731,6 +717,7 @@ async function syncSource(
       lastImportedCount: imported,
       lastDuplicateCount: unchanged,
       lastInvalidCount: invalid,
+      lastWarningCount: 0,
       lastSummaryJson: JSON.stringify({
         teamsCreated: imported,
         teamsUpdated: updated,
@@ -740,6 +727,8 @@ async function syncSource(
         discordRolesRenamed: rolesRenamed,
         discordChannelsCreated: channelsCreated,
         discordChannelsRenamed: channelsRenamed,
+        warnings: 0,
+        blockingErrors: invalid,
         instanceAssignmentsChanged: 0,
       }),
       lastError: null,
@@ -751,6 +740,8 @@ async function syncSource(
       duplicates: unchanged,
       invalid,
       details: [
+        "warnings=0",
+        `blocking_errors=${invalid}`,
         `teams_updated=${updated}`,
         `team_name_changes=${teamNameChanges}`,
         `community_changes=${communityChanges}`,
@@ -777,6 +768,7 @@ async function syncSource(
       lastImportedCount: 0,
       lastDuplicateCount: 0,
       lastInvalidCount: 0,
+      lastWarningCount: 0,
       lastSummaryJson: null,
       lastError: message,
     });
