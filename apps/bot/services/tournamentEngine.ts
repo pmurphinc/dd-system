@@ -9,6 +9,7 @@ import {
 } from "../mocks/tournamentState";
 import { getCycleResultsForCycle } from "../storage/cycleResults";
 import { PrismaDbClient, prisma } from "../storage/prisma";
+import { pushTournamentWebhookUpdate } from "./tournamentWebhook";
 
 export interface CycleFinalizationResult {
   didFinalizeCycle: boolean;
@@ -146,6 +147,9 @@ export async function finalizeCycleIfComplete(
 
   if (cycle >= 3) {
     await setTournamentState(buildCompletedTournamentState(tournamentState), db);
+    await pushTournamentWebhookUpdate({
+      reason: "legacy_finalize_cycle_complete",
+    });
 
     return {
       didFinalizeCycle: true,
@@ -159,6 +163,9 @@ export async function finalizeCycleIfComplete(
     buildNextCycleTournamentState(tournamentState, cycle + 1),
     db
   );
+  await pushTournamentWebhookUpdate({
+    reason: "legacy_finalize_cycle_advanced",
+  });
 
   return {
     didFinalizeCycle: true,

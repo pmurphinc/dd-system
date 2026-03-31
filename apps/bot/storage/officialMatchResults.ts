@@ -5,6 +5,7 @@ import {
   getFrpAwardByScore,
   recomputeStandingsForTournamentInstance,
 } from "./standings";
+import { pushTournamentWebhookUpdate } from "../services/tournamentWebhook";
 
 export interface OfficialMatchResultInput {
   tournamentInstanceId: number;
@@ -175,6 +176,11 @@ export async function recordOfficialMatchResult(
     actorDiscordUserId: input.enteredByDiscordUserId,
   });
 
+  await pushTournamentWebhookUpdate({
+    tournamentInstanceId: input.tournamentInstanceId,
+    reason: "official_result_recorded",
+  });
+
   return result;
 }
 
@@ -226,6 +232,11 @@ export async function voidOfficialMatchResult(
     entityId: `${matchAssignmentId}`,
     summary: `Voided official result for match assignment ${matchAssignmentId}.`,
     actorDiscordUserId,
+  });
+
+  await pushTournamentWebhookUpdate({
+    tournamentInstanceId: existing.tournamentInstanceId,
+    reason: "official_result_voided",
   });
 
   return updated;

@@ -9,6 +9,7 @@ import {
   setTeamCheckInStatus,
   assignTeamToTournamentInstance,
 } from "./teams";
+import { pushTournamentWebhookUpdate } from "../services/tournamentWebhook";
 
 export interface StoredTournamentInstance {
   id: number;
@@ -254,6 +255,11 @@ export async function openTournamentCheckIn(
     actorDiscordUserId,
   });
 
+  await pushTournamentWebhookUpdate({
+    tournamentInstanceId,
+    reason: "checkin_opened",
+  });
+
   return normalizeInstance(instance);
 }
 
@@ -277,6 +283,11 @@ export async function closeTournamentCheckIn(
     entityId: `${instance.id}`,
     summary: `Closed check-in for ${getInstanceAuditLabel(instance)}.`,
     actorDiscordUserId,
+  });
+
+  await pushTournamentWebhookUpdate({
+    tournamentInstanceId,
+    reason: "checkin_closed",
   });
 
   return normalizeInstance(instance);
@@ -337,6 +348,11 @@ export async function handleTournamentLeaderCheckIn(
     },
   });
 
+  await pushTournamentWebhookUpdate({
+    tournamentInstanceId,
+    reason: "leader_checked_in",
+  });
+
   return normalizeInstance(updated);
 }
 
@@ -387,6 +403,11 @@ export async function startTournamentCycle(
     actorDiscordUserId,
   });
 
+  await pushTournamentWebhookUpdate({
+    tournamentInstanceId,
+    reason: `cycle_${cycleNumber}_started`,
+  });
+
   return normalizeInstance(updated);
 }
 
@@ -412,6 +433,11 @@ export async function setTournamentInstanceFinalRoundReady(
     entityId: `${instance.id}`,
     summary: `Final Round ready for ${getInstanceAuditLabel(instance)} cycle ${cycleNumber}.`,
     actorDiscordUserId,
+  });
+
+  await pushTournamentWebhookUpdate({
+    tournamentInstanceId,
+    reason: `cycle_${cycleNumber}_final_round_ready`,
   });
 
   return normalizeInstance(instance);
@@ -469,6 +495,11 @@ export async function finalizeTournamentCycle(
     entityId: `${updated.id}`,
     summary: `Finalized cycle ${updated.currentCycle} for ${getInstanceAuditLabel(updated)}.`,
     actorDiscordUserId,
+  });
+
+  await pushTournamentWebhookUpdate({
+    tournamentInstanceId,
+    reason: "cycle_finalized",
   });
 
   return normalizeInstance(updated);
@@ -532,6 +563,14 @@ export async function finishTournamentInstance(
     actorDiscordUserId,
   });
 
+  await pushTournamentWebhookUpdate({
+    tournamentInstanceId,
+    reason:
+      status === TournamentInstanceStatus.TIEBREAKER_READY
+        ? "sudden_death_triggered"
+        : "tournament_completed",
+  });
+
   return normalizeInstance(updated);
 }
 
@@ -566,8 +605,15 @@ export async function reopenTournamentCycle(
     actorDiscordUserId,
   });
 
+  await pushTournamentWebhookUpdate({
+    tournamentInstanceId,
+    reason: `cycle_${cycleNumber}_reopened`,
+  });
+
   return normalizeInstance(updated);
-}export async function resetTournamentInstance(
+}
+
+export async function resetTournamentInstance(
   tournamentInstanceId: number,
   actorDiscordUserId: string
 ): Promise<StoredTournamentInstance> {
@@ -634,6 +680,11 @@ export async function reopenTournamentCycle(
 
   const updated = await prisma.tournamentInstance.findUnique({
     where: { id: tournamentInstanceId },
+  });
+
+  await pushTournamentWebhookUpdate({
+    tournamentInstanceId,
+    reason: "instance_reset",
   });
 
   return normalizeInstance(updated!);

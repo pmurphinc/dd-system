@@ -54,6 +54,7 @@ import {
   voidOfficialMatchResult,
 } from "../storage/officialMatchResults";
 import { TournamentStage } from "@prisma/client";
+import { pushTournamentWebhookUpdate } from "../services/tournamentWebhook";
 
 type CashoutDraft = {
   firstPlaceTeamId?: number;
@@ -1223,6 +1224,11 @@ export async function handleTournamentInstanceModal(
       } else {
         throw new Error("Unsupported override action.");
       }
+
+      await pushTournamentWebhookUpdate({
+        tournamentInstanceId: instanceId,
+        reason: "admin_override",
+      });
 
       const panel = await buildTournamentPanel(instanceId);
       await interaction.reply({
