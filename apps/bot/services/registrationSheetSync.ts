@@ -139,10 +139,6 @@ function readCell(row: string[], index: number | undefined): string {
   return (index === undefined ? "" : row[index] ?? "").trim();
 }
 
-function normalizeLinkCell(value: string): string {
-  return value.trim();
-}
-
 function inferOrderFromHeader(header: string): number {
   const normalized = normalizeHeader(header);
 
@@ -285,13 +281,6 @@ function normalizeRow(
   ).sort(
     (left, right) => inferOrderFromHeader(left.header) - inferOrderFromHeader(right.header)
   );
-  const screenshotColumns = findAllIndexes(
-    headers,
-    (normalized) =>
-      normalized.includes("screenshot") ||
-      normalized.includes("proof") ||
-      normalized.includes("image")
-  );
   const playerNameColumns = findAllIndexes(
     headers,
     (normalized) =>
@@ -320,15 +309,7 @@ function normalizeRow(
               inferOrderFromHeader(column.header) === inferOrderFromHeader(header)
           )?.index
         ) || "",
-      screenshotLink: normalizeLinkCell(
-        readCell(
-          row,
-          screenshotColumns.find(
-            (column) =>
-              inferOrderFromHeader(column.header) === inferOrderFromHeader(header)
-          )?.index
-        )
-      ),
+      screenshotLink: "",
     }))
     .filter((entry) => entry.embarkId);
 
@@ -339,10 +320,6 @@ function normalizeRow(
   const leaderEntry = embarkEntries.find((entry) => entry.order === 0) ?? embarkEntries[0];
   const leaderDisplayName =
     readCell(row, leaderNameIndex) || leaderEntry.displayName || "Leader";
-  const fallbackScreenshot = normalizeLinkCell(
-    readCell(row, screenshotColumns[0]?.index)
-  );
-
   const players = embarkEntries
     .sort((left, right) => left.order - right.order)
     .map((entry, index) => ({
@@ -351,7 +328,7 @@ function normalizeRow(
           ? leaderDisplayName
           : entry.displayName || (entry.order === 4 ? "Substitute" : `Player ${index + 1}`),
       embarkId: entry.embarkId.trim(),
-      screenshotLink: entry.screenshotLink || fallbackScreenshot,
+      screenshotLink: entry.screenshotLink,
       discordUserId:
         index === 0
           ? readCell(row, leaderDiscordIndex).replace(/[<@!>]/g, "").trim()
@@ -384,21 +361,7 @@ function normalizeRow(
 }
 
 function getRowValidationIssues(row: NormalizedSheetRow): RowValidationIssue[] {
-  const issues: RowValidationIssue[] = [];
-  const missingAccessPlayers = row.players.filter((player) =>
-    player.screenshotLink.toLowerCase().includes("missing access")
-  );
-
-  if (missingAccessPlayers.length > 0) {
-    issues.push({
-      severity: "warning",
-      reason: `Missing Access (${missingAccessPlayers
-        .map((player) => player.displayName)
-        .join(", ")})`,
-    });
-  }
-
-  return issues;
+  return [];
 }
 
 function toBase64Url(input: string): string {
