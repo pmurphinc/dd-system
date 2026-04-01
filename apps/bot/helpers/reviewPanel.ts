@@ -85,32 +85,6 @@ function formatPlayers(submission: StoredRegistrationSubmission | null): string 
   return lines.length > 0 ? truncateValue(lines.join("\n")) : "-";
 }
 
-function formatScreenshots(submission: StoredRegistrationSubmission | null): string {
-  if (!submission) {
-    return "-";
-  }
-
-  const orderedRoster = getOrderedRoster(submission);
-  const screenshotLines = orderedRoster.map((player, index) => {
-    const roleLabel =
-      player.isLeader
-        ? "Leader"
-        : player.sortOrder >= 4
-          ? "Substitute"
-          : `Player ${index + 1}`;
-    const rawValue = player.screenshotLink.trim();
-    const status = rawValue ? "Screenshot provided" : "Screenshot missing";
-
-    return rawValue
-      ? `${roleLabel} (${player.displayName}): ${status}\n${rawValue}`
-      : `${roleLabel} (${player.displayName}): ${status}`;
-  });
-
-  return screenshotLines.length > 0
-    ? truncateValue(screenshotLines.join("\n"))
-    : "-";
-}
-
 function getMapBanValue(submission: StoredRegistrationSubmission | null): string {
   if (!submission) {
     return "-";
@@ -308,11 +282,6 @@ export async function buildReviewPanel(
       {
         name: "PLAYERS",
         value: formatPlayers(selectedSubmission),
-        inline: false,
-      },
-      {
-        name: "SCREENSHOTS",
-        value: formatScreenshots(selectedSubmission),
         inline: false,
       },
       {
