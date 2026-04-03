@@ -677,7 +677,11 @@ async function syncSource(
             communityChanges += 1;
           }
 
-          if (teamSync.team && guild) {
+          if (
+            teamSync.team &&
+            guild &&
+            result.submission.reviewStatus === "approved"
+          ) {
             const setup = await ensureDiscordTeamSetup(
               guild,
               teamSync.team,
@@ -691,7 +695,7 @@ async function syncSource(
           }
         } else {
           const team = teamSync.team ?? (await getTeamBySubmissionId(result.submission.id));
-          if (team && guild) {
+          if (team && guild && result.submission.reviewStatus === "approved") {
             const setup = await ensureDiscordTeamSetup(
               guild,
               team,
@@ -699,7 +703,7 @@ async function syncSource(
             );
             if (setup.roleAction === "created") rolesCreated += 1;
             if (setup.voiceAction === "created") channelsCreated += 1;
-          } else {
+          } else if (!team || !guild) {
             unchanged += 1;
           }
         }

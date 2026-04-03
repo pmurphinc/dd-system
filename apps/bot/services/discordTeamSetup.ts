@@ -146,6 +146,22 @@ export async function ensureDiscordTeamSetup(
   actorDiscordUserId: string,
   previousTeamName?: string | null
 ): Promise<TeamSetupResult> {
+  if (team.importedFromSubmissionId) {
+    const submission = await getRegistrationById(team.importedFromSubmissionId);
+
+    if (!submission) {
+      throw new Error(
+        "The linked registration submission could not be found for Discord setup."
+      );
+    }
+
+    if (submission.reviewStatus !== "approved") {
+      throw new Error(
+        "Discord team setup is blocked until the submission is approved in /review."
+      );
+    }
+  }
+
   const config = await resolveSetupConfig(guild);
   const voiceCategory = await resolveVoiceCategory(
     guild,
