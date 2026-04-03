@@ -186,11 +186,7 @@ export async function buildAdminPanel(
     new ButtonBuilder()
       .setCustomId("admin:change_instance")
       .setLabel("Select Instance")
-      .setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder()
-      .setCustomId(`admin:${instance.id}:delete_unassigned_teams`)
-      .setLabel("Delete Unassigned Team")
-      .setStyle(ButtonStyle.Danger)
+      .setStyle(ButtonStyle.Secondary)
   );
 
   return {
