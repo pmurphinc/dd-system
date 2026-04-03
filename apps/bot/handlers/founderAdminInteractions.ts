@@ -22,6 +22,7 @@ import {
 } from "../storage/tournamentInstances";
 import {
   assignTeamToTournamentInstance,
+  deleteImportedTeam,
   listImportedTeams,
   listImportedTeamsForTournamentInstance,
 } from "../storage/teams";
@@ -282,6 +283,41 @@ const menu = new StringSelectMenuBuilder()
     return true;
   }
 
+  if (action === "delete_team") {
+    const assignedTeams = await listImportedTeamsForTournamentInstance(instanceId);
+
+    if (assignedTeams.length === 0) {
+      await interaction.reply({
+        content: "No teams in this instance are available to delete.",
+        ephemeral: true,
+      });
+      return true;
+    }
+
+    const menu = new StringSelectMenuBuilder()
+      .setCustomId(`admin:delete_team_select:${instanceId}`)
+      .setPlaceholder("Select a team to delete")
+      .addOptions(
+        assignedTeams.slice(0, 25).map((team) => ({
+          label: team.teamName.slice(0, 100),
+          description: "Deletes locally and attempts source sheet row deletion.".slice(
+            0,
+            100
+          ),
+          value: `${team.id}`,
+        }))
+      );
+
+    await interaction.reply({
+      content:
+        "Select a team to permanently delete. This also attempts to delete the source spreadsheet row.",
+      components: [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(menu)],
+      ephemeral: true,
+    });
+
+    return true;
+  }
+
   if (action === "reset_instance") {
     const confirmRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
       new ButtonBuilder()
@@ -456,6 +492,27 @@ export async function handleFounderAdminSelectMenu(
       ephemeral: true,
     });
 
+    return true;
+  }
+
+  if (interaction.customId.startsWith("admin:delete_team_select:")) {
+    const instanceId = Number(interaction.customId.split(":")[2]);
+    const teamId = Number(interaction.values[0]);
+
+    const deleted = await deleteImportedTeam(teamId, interaction.user.id);
+    const panel = await buildAdminPanel(guildId, instanceId);
+
+    const spreadsheetStatus = !deleted.sheetDeleteAttempted
+      ? "No source spreadsheet metadata was available."
+      : deleted.sheetDeleteSucceeded
+        ? "Source spreadsheet row deleted."
+        : `Source spreadsheet row delete failed: ${deleted.sheetDeleteError ?? "unknown error"}.`;
+
+    await interaction.reply({
+      content: `Deleted team **${deleted.teamName}**. ${spreadsheetStatus}`,
+      ...panel,
+      ephemeral: true,
+    });
     return true;
   }
 
