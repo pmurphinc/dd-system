@@ -284,11 +284,11 @@ const menu = new StringSelectMenuBuilder()
   }
 
   if (action === "delete_team") {
-    const importedTeams = await listImportedTeams();
+    const assignedTeams = await listImportedTeamsForTournamentInstance(instanceId);
 
-    if (importedTeams.length === 0) {
+    if (assignedTeams.length === 0) {
       await interaction.reply({
-        content: "No imported teams are available to delete.",
+        content: "No teams in this instance are available to delete.",
         ephemeral: true,
       });
       return true;
@@ -298,19 +298,19 @@ const menu = new StringSelectMenuBuilder()
       .setCustomId(`admin:delete_team_select:${instanceId}`)
       .setPlaceholder("Select a team to delete")
       .addOptions(
-        importedTeams.slice(0, 25).map((team) => ({
+        assignedTeams.slice(0, 25).map((team) => ({
           label: team.teamName.slice(0, 100),
-          description:
-            team.tournamentInstanceId === null
-              ? "Currently unassigned"
-              : `Instance ${team.tournamentInstanceId}`,
+          description: "Deletes locally and attempts source sheet row deletion.".slice(
+            0,
+            100
+          ),
           value: `${team.id}`,
         }))
       );
 
     await interaction.reply({
       content:
-        "Select a team to permanently delete (from any instance). This also attempts to delete the source spreadsheet row.",
+        "Select a team to permanently delete. This also attempts to delete the source spreadsheet row.",
       components: [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(menu)],
       ephemeral: true,
     });
