@@ -1,6 +1,6 @@
 import { ChatInputCommandInteraction, SlashCommandBuilder } from "discord.js";
 import { BotCommand } from "./types";
-import { buildAdminInstancePicker, buildAdminPanel } from "../helpers/adminPanel";
+import { buildAdminPanel } from "../helpers/adminPanel";
 
 export const adminCommand: BotCommand = {
   data: new SlashCommandBuilder()
@@ -22,17 +22,7 @@ export const adminCommand: BotCommand = {
       return;
     }
 
-    const instanceId = interaction.options.getInteger("instance");
-
-    if (instanceId === null) {
-      const picker = await buildAdminInstancePicker(interaction.guildId);
-      await interaction.reply({
-        ...picker,
-        ephemeral: true,
-      });
-      return;
-    }
-
+    const instanceId = interaction.options.getInteger("instance") ?? undefined;
     const panel = await buildAdminPanel(interaction.guildId, instanceId);
     await interaction.reply({
       ...panel,

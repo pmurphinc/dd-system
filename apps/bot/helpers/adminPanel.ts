@@ -185,7 +185,7 @@ export async function buildAdminPanel(
   const rowThree = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
       .setCustomId("admin:change_instance")
-      .setLabel("Change Instance")
+      .setLabel("Select Instance")
       .setStyle(ButtonStyle.Secondary)
   );
 
