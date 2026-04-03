@@ -766,3 +766,34 @@ export async function markRegistrationImported(
     actorDiscordUserId,
   });
 }
+
+export async function clearRegistrationImportedTeam(
+  id: number,
+  actorDiscordUserId: string
+): Promise<void> {
+  await ensureRegistrationTables();
+
+  const existing = await prisma.registrationSubmission.findUnique({
+    where: { id },
+  });
+
+  if (!existing || existing.importedTeamId === null) {
+    return;
+  }
+
+  await prisma.registrationSubmission.update({
+    where: { id },
+    data: {
+      importedTeamId: null,
+      updatedAt: new Date(),
+    },
+  });
+
+  await createAuditLog({
+    action: "registration_import_link_cleared",
+    entityType: "registration_submission",
+    entityId: `${id}`,
+    summary: `Cleared imported team link for ${existing.teamName}.`,
+    actorDiscordUserId,
+  });
+}

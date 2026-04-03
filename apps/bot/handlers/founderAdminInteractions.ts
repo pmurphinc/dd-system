@@ -22,8 +22,10 @@ import {
 } from "../storage/tournamentInstances";
 import {
   assignTeamToTournamentInstance,
+  deleteImportedTeam,
   listImportedTeams,
   listImportedTeamsForTournamentInstance,
+  listUnassignedImportedTeams,
 } from "../storage/teams";
 
 function parseAdminButton(customId: string) {
@@ -282,6 +284,94 @@ const menu = new StringSelectMenuBuilder()
     return true;
   }
 
+  if (action === "delete_team") {
+    const importedTeams = await listImportedTeams();
+
+    if (importedTeams.length === 0) {
+      await interaction.reply({
+        content: "No imported teams are available to delete.",
+        ephemeral: true,
+      });
+      return true;
+    }
+
+    const instances = await listTournamentInstancesForGuild(guildId);
+    const teamsByInstanceId = new Set(
+      importedTeams
+        .map((team) => team.tournamentInstanceId)
+        .filter((id): id is number => id !== null)
+    );
+    const hasUnassignedTeams = importedTeams.some(
+      (team) => team.tournamentInstanceId === null
+    );
+
+    const menu = new StringSelectMenuBuilder()
+      .setCustomId(`admin:delete_team_select_instance:${instanceId}`)
+      .setPlaceholder("Select an instance")
+      .addOptions(
+        [
+          ...instances
+            .filter((row) => teamsByInstanceId.has(row.id))
+            .slice(0, 24)
+            .map((row) => ({
+              label: (row.displayName ?? row.orgName ?? row.name).slice(0, 100),
+              description: `Pod ${row.podNumber ?? "-"} • id ${row.id}`.slice(0, 100),
+              value: `${row.id}`,
+            })),
+          ...(hasUnassignedTeams
+            ? [
+                {
+                  label: "Unassigned Teams",
+                  description: "Teams not assigned to any instance".slice(0, 100),
+                  value: "unassigned",
+                },
+              ]
+            : []),
+        ].slice(0, 25)
+      );
+
+    await interaction.reply({
+      content:
+        "Select which instance contains the team you want to delete.",
+      components: [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(menu)],
+      ephemeral: true,
+    });
+
+    return true;
+  }
+
+  if (action === "delete_unassigned_teams") {
+    const unassignedTeams = await listUnassignedImportedTeams();
+
+    if (unassignedTeams.length === 0) {
+      await interaction.reply({
+        content: "No unassigned teams are available to delete.",
+        ephemeral: true,
+      });
+      return true;
+    }
+
+    const menu = new StringSelectMenuBuilder()
+      .setCustomId(`admin:delete_unassigned_team_select:${instanceId}`)
+      .setPlaceholder("Select an unassigned team to delete")
+      .addOptions(
+        unassignedTeams.slice(0, 25).map((team) => ({
+          label: team.teamName.slice(0, 100),
+          description: "Unassigned imported team".slice(0, 100),
+          value: `${team.id}`,
+        }))
+      );
+
+    await interaction.reply({
+      content:
+        "Select an unassigned team to permanently delete. This also attempts source spreadsheet row deletion.",
+      components: [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(menu)],
+      ephemeral: true,
+    });
+
+    return true;
+  }
+
   if (action === "reset_instance") {
     const confirmRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
       new ButtonBuilder()
@@ -456,6 +546,86 @@ export async function handleFounderAdminSelectMenu(
       ephemeral: true,
     });
 
+    return true;
+  }
+
+  if (interaction.customId.startsWith("admin:delete_team_select_instance:")) {
+    const instanceId = Number(interaction.customId.split(":")[2]);
+    const selectedInstance = interaction.values[0];
+    const importedTeams = await listImportedTeams();
+    const candidates = importedTeams.filter((team) =>
+      selectedInstance === "unassigned"
+        ? team.tournamentInstanceId === null
+        : team.tournamentInstanceId === Number(selectedInstance)
+    );
+
+    if (candidates.length === 0) {
+      await interaction.reply({
+        content: "No teams were found for that selection.",
+        ephemeral: true,
+      });
+      return true;
+    }
+
+    const menu = new StringSelectMenuBuilder()
+      .setCustomId(`admin:delete_team_select_team:${instanceId}:${selectedInstance}`)
+      .setPlaceholder("Select a team to permanently delete")
+      .addOptions(
+        candidates.slice(0, 25).map((team) => ({
+          label: team.teamName.slice(0, 100),
+          description: "Imported team".slice(0, 100),
+          value: `${team.id}`,
+        }))
+      );
+
+    await interaction.reply({
+      content:
+        "Select the team to permanently delete. This also attempts source spreadsheet row deletion.",
+      components: [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(menu)],
+      ephemeral: true,
+    });
+    return true;
+  }
+
+  if (interaction.customId.startsWith("admin:delete_team_select_team:")) {
+    const instanceId = Number(interaction.customId.split(":")[2]);
+    const teamId = Number(interaction.values[0]);
+
+    const deleted = await deleteImportedTeam(teamId, interaction.user.id);
+    const panel = await buildAdminPanel(guildId, instanceId);
+
+    const spreadsheetStatus = !deleted.sheetDeleteAttempted
+      ? "No source spreadsheet metadata was available."
+      : deleted.sheetDeleteSucceeded
+        ? "Source spreadsheet row deleted."
+        : `Source spreadsheet row delete failed: ${deleted.sheetDeleteError ?? "unknown error"}.`;
+
+    await interaction.reply({
+      content: `Deleted team **${deleted.teamName}**. ${spreadsheetStatus}`,
+      ...panel,
+      ephemeral: true,
+    });
+    return true;
+  }
+
+  if (interaction.customId.startsWith("admin:delete_unassigned_team_select:")) {
+    const instanceId = Number(interaction.customId.split(":")[2]);
+    const teamId = Number(interaction.values[0]);
+
+    const deleted = await deleteImportedTeam(teamId, interaction.user.id);
+    const panel = await buildAdminPanel(guildId, instanceId);
+
+    const spreadsheetStatus = !deleted.sheetDeleteAttempted
+      ? "No source spreadsheet metadata was available."
+      : deleted.sheetDeleteSucceeded
+        ? "Source spreadsheet row deleted."
+        : `Source spreadsheet row delete failed: ${deleted.sheetDeleteError ?? "unknown error"}.`;
+
+    await interaction.reply({
+      content: `Deleted unassigned team **${deleted.teamName}**. ${spreadsheetStatus}`,
+      ...panel,
+      ephemeral: true,
+    });
     return true;
   }
 
