@@ -1,11 +1,13 @@
 import { GuildMemberRoleManager } from "discord.js";
 import { prisma } from "./prisma";
 import {
+  clearRegistrationImportedTeam,
   getRegistrationById,
   markRegistrationImported,
   StoredRegistrationSubmission,
 } from "./registrations";
 import { createAuditLog } from "./auditLog";
+import { deleteSourceRowFromGoogleSheet } from "../services/googleSheetsAdmin";
 
 export interface StoredTeamMember {
   id: number;
@@ -670,6 +672,88 @@ export async function assignTeamToTournamentInstance(
   });
 
   return mapTeam(updated);
+}
+
+export async function deleteImportedTeam(
+  teamId: number,
+  actorDiscordUserId: string
+): Promise<{
+  teamName: string;
+  sheetDeleteAttempted: boolean;
+  sheetDeleteSucceeded: boolean;
+  sheetDeleteError: string | null;
+}> {
+  await ensureTeamTables();
+
+  const team = await prisma.team.findUnique({
+    where: { id: teamId },
+    include: {
+      members: {
+        orderBy: { sortOrder: "asc" },
+      },
+    },
+  });
+
+  if (!team) {
+    throw new Error("Team not found.");
+  }
+
+  if (team.importedFromSubmissionId === null) {
+    throw new Error("Only imported teams can be deleted from this panel.");
+  }
+
+  const registration = await getRegistrationById(team.importedFromSubmissionId);
+  const canDeleteSheetRow = Boolean(
+    registration?.sourceSpreadsheetId &&
+      registration.sourceWorksheetTitle &&
+      registration.sourceRowNumber
+  );
+
+  let sheetDeleteSucceeded = false;
+  let sheetDeleteError: string | null = null;
+
+  if (registration && canDeleteSheetRow) {
+    try {
+      await deleteSourceRowFromGoogleSheet(
+        registration.sourceSpreadsheetId as string,
+        registration.sourceWorksheetTitle as string,
+        registration.sourceRowNumber as number
+      );
+      sheetDeleteSucceeded = true;
+    } catch (error) {
+      sheetDeleteError = error instanceof Error ? error.message : "Unknown sheet delete error.";
+    }
+  }
+
+  await prisma.$transaction(async (tx: any) => {
+    await tx.teamMember.deleteMany({
+      where: { teamId },
+    });
+
+    await tx.team.delete({
+      where: { id: teamId },
+    });
+  });
+
+  await clearRegistrationImportedTeam(team.importedFromSubmissionId, actorDiscordUserId);
+
+  await createAuditLog({
+    action: "team_deleted_from_admin",
+    entityType: "team",
+    entityId: `${teamId}`,
+    summary: `Deleted imported team ${team.teamName}.`,
+    details: canDeleteSheetRow
+      ? `Source sheet row delete ${sheetDeleteSucceeded ? "succeeded" : `failed: ${sheetDeleteError ?? "unknown error"}`}.`
+      : "No source sheet row metadata was available.",
+    actorDiscordUserId,
+  });
+
+  return {
+    teamName: team.teamName,
+    sheetDeleteAttempted: canDeleteSheetRow,
+    sheetDeleteSucceeded,
+    sheetDeleteError,
+  };
 }
 
 export async function setTeamCheckInStatus(
