@@ -106,7 +106,7 @@ export async function buildAdminPanel(
         name: "Assigned Teams",
         value:
           assignedTeams.length > 0
-            ? assignedTeams.map((team) => `${team.id}: ${team.teamName}`).join("\n")
+            ? assignedTeams.map((team) => team.teamName).join("\n")
             : "No teams assigned.",
         inline: false,
       },
@@ -114,10 +114,7 @@ export async function buildAdminPanel(
         name: "Unassigned Teams",
         value:
           unassignedTeams.length > 0
-            ? unassignedTeams
-                .map((team) => `${team.id}: ${team.teamName}`)
-                .join("\n")
-                .slice(0, 1024)
+            ? unassignedTeams.map((team) => team.teamName).join("\n").slice(0, 1024)
             : "None",
         inline: false,
       },
@@ -126,7 +123,7 @@ export async function buildAdminPanel(
         value:
           otherInstances.length > 0
             ? otherInstances
-                .map((row) => `${row.id}: ${getTournamentInstanceLabel(row)}`)
+                .map((row) => getTournamentInstanceLabel(row))
                 .join("\n")
                 .slice(0, 1024)
             : "None",
@@ -172,6 +169,10 @@ export async function buildAdminPanel(
       .setLabel("Move Team")
       .setStyle(ButtonStyle.Secondary),
     new ButtonBuilder()
+      .setCustomId(`admin:${instance.id}:delete_team`)
+      .setLabel("Delete Team")
+      .setStyle(ButtonStyle.Danger),
+    new ButtonBuilder()
       .setCustomId(`admin:${instance.id}:toggle_lock`)
       .setLabel(instance.isLocked ? "Unlock Instance" : "Lock Instance")
       .setStyle(ButtonStyle.Secondary),
@@ -184,7 +185,7 @@ export async function buildAdminPanel(
   const rowThree = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
       .setCustomId("admin:change_instance")
-      .setLabel("Change Instance")
+      .setLabel("Select Instance")
       .setStyle(ButtonStyle.Secondary)
   );
 
