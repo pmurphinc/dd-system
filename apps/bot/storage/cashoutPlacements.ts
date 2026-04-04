@@ -1,6 +1,5 @@
 import { prisma } from "./prisma";
 import { createAuditLog } from "./auditLog";
-import { setTournamentInstanceFinalRoundReady } from "./tournamentInstances";
 
 export interface CashoutPlacementInput {
   tournamentInstanceId: number;
@@ -15,6 +14,15 @@ export interface CashoutPlacementInput {
 export async function upsertCashoutPlacement(
   input: CashoutPlacementInput
 ): Promise<void> {
+  const columns = (await prisma.$queryRawUnsafe(
+    `PRAGMA table_info("CashoutPlacement")`
+  )) as Array<{ name: string }>;
+  if (!columns.some((column) => column.name === "assignedMap")) {
+    await prisma.$executeRawUnsafe(
+      `ALTER TABLE "CashoutPlacement" ADD COLUMN "assignedMap" TEXT`
+    );
+  }
+
   const teamIds = [
     input.firstPlaceTeamId,
     input.secondPlaceTeamId,
@@ -74,10 +82,10 @@ export async function upsertCashoutPlacement(
     },
   });
 
-  const firstTeam = teams.find((team) => team.id === input.firstPlaceTeamId);
-  const secondTeam = teams.find((team) => team.id === input.secondPlaceTeamId);
-  const thirdTeam = teams.find((team) => team.id === input.thirdPlaceTeamId);
-  const fourthTeam = teams.find((team) => team.id === input.fourthPlaceTeamId);
+  const firstTeam = teams.find((team: { id: number }) => team.id === input.firstPlaceTeamId);
+  const secondTeam = teams.find((team: { id: number }) => team.id === input.secondPlaceTeamId);
+  const thirdTeam = teams.find((team: { id: number }) => team.id === input.thirdPlaceTeamId);
+  const fourthTeam = teams.find((team: { id: number }) => team.id === input.fourthPlaceTeamId);
 
   if (!firstTeam || !secondTeam || !thirdTeam || !fourthTeam) {
     throw new Error("Unable to resolve the full set of placed teams.");
@@ -107,12 +115,6 @@ export async function upsertCashoutPlacement(
       },
     ],
   });
-
-  await setTournamentInstanceFinalRoundReady(
-    input.tournamentInstanceId,
-    input.cycleNumber,
-    input.actorDiscordUserId
-  );
 
   await createAuditLog({
     action: "cashout_placements_recorded",

@@ -10,6 +10,7 @@ import {
   assignTeamToTournamentInstance,
 } from "./teams";
 import { pushTournamentWebhookUpdate } from "../services/tournamentWebhook";
+import { assignCashoutMapForCycleIfMissing, normalizeMapBan } from "./tournamentMaps";
 
 export interface StoredTournamentInstance {
   id: number;
@@ -375,6 +376,7 @@ export async function startTournamentCycle(
 
   const teams = await listImportedTeamsForTournamentInstance(tournamentInstanceId);
   const checkedInTeams = teams.filter((team) => team.checkInStatus === "Checked In");
+  const missingBanTeams = teams.filter((team) => !normalizeMapBan(team.mapBan));
 
   if (teams.length !== instance.maxTeams) {
     throw new Error("This tournament instance must have exactly 4 teams assigned.");
@@ -382,6 +384,14 @@ export async function startTournamentCycle(
 
   if (cycleNumber === 1 && checkedInTeams.length < instance.maxTeams) {
     throw new Error("All 4 teams must check in before Cycle 1 starts.");
+  }
+
+  if (missingBanTeams.length > 0) {
+    throw new Error(
+      `Cannot start cycle. Missing/invalid map bans for: ${missingBanTeams
+        .map((team) => team.teamName)
+        .join(", ")}.`
+    );
   }
 
   const updated = await prisma.tournamentInstance.update({
@@ -402,6 +412,29 @@ export async function startTournamentCycle(
     summary: `Prepared ${getInstanceAuditLabel(updated)} for cycle ${cycleNumber} cashout.`,
     actorDiscordUserId,
   });
+
+  await prisma.cashoutPlacement.upsert({
+    where: {
+      tournamentInstanceId_cycleNumber: {
+        tournamentInstanceId,
+        cycleNumber,
+      },
+    },
+    update: {
+      updatedAt: new Date(),
+    },
+    create: {
+      tournamentInstanceId,
+      cycleNumber,
+      firstPlaceTeamId: teams[0]!.id,
+      secondPlaceTeamId: teams[1]!.id,
+      thirdPlaceTeamId: teams[2]!.id,
+      fourthPlaceTeamId: teams[3]!.id,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    },
+  });
+  await assignCashoutMapForCycleIfMissing(tournamentInstanceId, cycleNumber);
 
   await pushTournamentWebhookUpdate({
     tournamentInstanceId,
@@ -531,7 +564,7 @@ export async function finishTournamentInstance(
   }
 
   const highestFrp = standings[0]?.frp ?? 0;
-  const tiedTeams = standings.filter((standing) => standing.frp === highestFrp);
+  const tiedTeams = standings.filter((standing: { frp: number }) => standing.frp === highestFrp);
   const status =
     tiedTeams.length > 1
       ? TournamentInstanceStatus.TIEBREAKER_READY
@@ -625,7 +658,7 @@ export async function resetTournamentInstance(
     throw new Error("Tournament instance not found.");
   }
 
-  await prisma.$transaction(async (tx) => {
+  await prisma.$transaction(async (tx: any) => {
     // 1. Clear standings
     await tx.standing.deleteMany({
       where: { tournamentInstanceId },

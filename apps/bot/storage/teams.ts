@@ -34,6 +34,7 @@ export interface StoredTeam {
   importedFromSubmissionId: number | null;
   isPlacedInEvent: boolean;
   tournamentInstanceId: number | null;
+  mapBan: string | null;
   members: StoredTeamMember[];
 }
 
@@ -103,6 +104,11 @@ async function ensureTeamTables(): Promise<void> {
       "tournamentInstanceId",
       `ALTER TABLE "Team" ADD COLUMN "tournamentInstanceId" INTEGER`
     );
+    await ensureColumn(
+      "Team",
+      "mapBan",
+      `ALTER TABLE "Team" ADD COLUMN "mapBan" TEXT`
+    );
 
     await prisma.$executeRawUnsafe(`
       CREATE UNIQUE INDEX IF NOT EXISTS "Team_teamName_key"
@@ -168,6 +174,7 @@ function mapTeam(record: any): StoredTeam {
     importedFromSubmissionId: record.importedFromSubmissionId,
     isPlacedInEvent: record.isPlacedInEvent,
     tournamentInstanceId: record.tournamentInstanceId,
+    mapBan: record.mapBan ?? null,
     members: (record.members ?? []).map((member: any) => ({
       id: member.id,
       teamId: member.teamId,
@@ -198,6 +205,7 @@ function buildTeamPayload(submission: StoredRegistrationSubmission) {
     approvalStatus: "Approved",
     checkInStatus: "Not Checked In",
     leaderDiscordUserId: submission.leaderDiscordUserId,
+    mapBan: submission.mapBan ?? null,
   };
 }
 

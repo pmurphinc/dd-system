@@ -10,6 +10,7 @@ import { getOfficialResultByMatchAssignmentId } from "../storage/officialMatchRe
 import { getCurrentFinalRoundAssignmentForTeam } from "../storage/matchAssignments";
 import {
   getCurrentTeamStageSubmission,
+  getTeamStageSubmissionType,
   getTeamStageSubmissionStatusLabel,
 } from "../storage/reportSubmissions";
 import { getStandingsForTournamentInstance } from "../storage/standings";
@@ -18,6 +19,7 @@ import {
   getTournamentInstanceById,
   syncTournamentInstancesForGuild,
 } from "../storage/tournamentInstances";
+import { getAssignedMapForTeamCurrentStage } from "../storage/tournamentMaps";
 import { isCheckInOpen } from "./tournamentAccess";
 import { getTeamLeaderAccessDebug } from "./permissions";
 
@@ -123,6 +125,13 @@ export async function buildTeamPanel(
     instance && currentCycle && (currentStage === TournamentStage.CASHOUT || currentStage === TournamentStage.FINAL_ROUND)
       ? await getCurrentTeamStageSubmission(instance.id, team.id, currentCycle, currentStage)
       : null;
+  const currentSubmissionType = currentSubmission
+    ? getTeamStageSubmissionType(currentSubmission)
+    : null;
+  const assignedMap =
+    instance && currentCycle && currentStage
+      ? await getAssignedMapForTeamCurrentStage(instance.id, team.id, currentCycle, currentStage)
+      : null;
 
   const fields: Array<{ name: string; value: string; inline?: boolean }> = [
     {
@@ -148,6 +157,16 @@ export async function buildTeamPanel(
     {
       name: "Submitted Result Status",
       value: getTeamStageSubmissionStatusLabel(currentSubmission),
+      inline: true,
+    },
+    {
+      name: "Banned Map (Registration)",
+      value: team.mapBan ?? "Missing",
+      inline: true,
+    },
+    {
+      name: "Assigned Map",
+      value: assignedMap ?? "Not assigned",
       inline: true,
     },
   ];
@@ -223,7 +242,7 @@ export async function buildTeamPanel(
         .setDisabled(!canSubmitFinalRound),
       new ButtonBuilder()
         .setCustomId(
-          currentStage === TournamentStage.CASHOUT
+          currentSubmissionType === "CASHOUT_PLACEMENT"
             ? `team:edit_cashout:${instance.id}:${team.id}`
             : `team:edit_final_round:${instance.id}:${team.id}`
         )

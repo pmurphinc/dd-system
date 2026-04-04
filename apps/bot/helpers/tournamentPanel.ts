@@ -19,6 +19,7 @@ import {
   syncTournamentInstancesForGuild,
 } from "../storage/tournamentInstances";
 import { listImportedTeamsForTournamentInstance } from "../storage/teams";
+import { getCashoutAssignedMapForCycle, normalizeMapBan } from "../storage/tournamentMaps";
 
 function formatEnumLabel(value: string): string {
   return value
@@ -120,18 +121,22 @@ export async function buildTournamentPanel(
       : Promise.resolve([]),
   ]);
 
-  const pendingCount = stageSubmissions.filter((row) => row.status === "pending").length;
-  const approvedCount = stageSubmissions.filter((row) => row.status === "reviewed").length;
+  const pendingCount = stageSubmissions.filter((row: { status: string }) => row.status === "pending").length;
+  const approvedCount = stageSubmissions.filter((row: { status: string }) => row.status === "reviewed").length;
+  const cashoutAssignedMap =
+    instance.currentCycle !== null
+      ? await getCashoutAssignedMapForCycle(instance.id, instance.currentCycle)
+      : null;
 
   const getTeamNameById = (teamId?: number | null) => {
     if (!teamId) return "Not set";
-    return teams.find((team) => team.id === teamId)?.teamName ?? `Unknown Team (${teamId})`;
+    return teams.find((team: { id: number; teamName: string }) => team.id === teamId)?.teamName ?? `Unknown Team (${teamId})`;
   };
 
   const teamLabel =
     teams.length > 0
       ? teams
-          .map((team) => {
+          .map((team: { checkInStatus: string; mapBan: string | null; teamName: string }) => {
             const normalizedStatus = String(team.checkInStatus)
               .trim()
               .toUpperCase()
@@ -141,7 +146,8 @@ export async function buildTournamentPanel(
             const statusIcon = isCheckedIn ? "✅" : "❌";
             const statusText = isCheckedIn ? "Checked In" : "Not Checked In";
 
-            return `${statusIcon} ${team.teamName} — ${statusText}`;
+            const teamBan = normalizeMapBan(team.mapBan);
+            return `${statusIcon} ${team.teamName} — ${statusText} | Ban: ${teamBan ?? "Missing"}`;
           })
           .join("\n")
       : "No teams assigned.";
@@ -150,10 +156,10 @@ export async function buildTournamentPanel(
     assignments.length > 0
       ? assignments
           .map(
-            (assignment) =>
+            (assignment: { cycleNumber: number; stageName: string; teamName: string; opponentTeamName: string; assignedMap: string | null }) =>
               `${formatCycleLabel(assignment.cycleNumber)} ${formatEnumLabel(
                 assignment.stageName
-              )}: ${assignment.teamName} vs ${assignment.opponentTeamName}`
+              )}: ${assignment.teamName} vs ${assignment.opponentTeamName} | Map: ${assignment.assignedMap ?? "Not assigned"}`
           )
           .join("\n")
       : "No match assignments yet.";
@@ -162,7 +168,7 @@ export async function buildTournamentPanel(
     officialResults.length > 0
       ? officialResults
           .map(
-            (result) =>
+            (result: { cycleNumber: number; score: string }) =>
               `Cycle ${result.cycleNumber}: ${result.score.replace(/_/g, "-")}`
           )
           .join("\n")
@@ -170,7 +176,7 @@ export async function buildTournamentPanel(
 
   const standingsLabel =
     standings.length > 0
-      ? standings.map((standing) => `${standing.teamName}: ${standing.frp} FRP`).join("\n")
+      ? standings.map((standing: { teamName: string; frp: number }) => `${standing.teamName}: ${standing.frp} FRP`).join("\n")
       : "No standings yet.";
 
   const placementLabel = placements
@@ -186,11 +192,12 @@ export async function buildTournamentPanel(
     stageSubmissions.length > 0
       ? stageSubmissions
           .map(
-            (submission) =>
+            (submission: { teamName: string; score: string; status: string }) =>
               `${submission.teamName}: ${submission.score} (${submission.status})`
           )
           .join("\n")
       : "No team submissions for current stage.";
+  const missingBanTeams = teams.filter((team: { mapBan: string | null }) => !normalizeMapBan(team.mapBan));
 
   const embed = new EmbedBuilder()
     .setTitle(`Tournament Panel: ${getTournamentInstanceLabel(instance)}`)
@@ -217,6 +224,19 @@ export async function buildTournamentPanel(
         name: "Approved Team Submissions",
         value: `${approvedCount}`,
         inline: true,
+      },
+      {
+        name: "Cashout Assigned Map",
+        value: cashoutAssignedMap ?? "Not assigned",
+        inline: true,
+      },
+      {
+        name: "Map Ban Issues",
+        value:
+          missingBanTeams.length > 0
+            ? missingBanTeams.map((team: { teamName: string }) => team.teamName).join(", ").slice(0, 1024)
+            : "None",
+        inline: false,
       },
       {
         name: "Winning Team",
@@ -274,15 +294,7 @@ export async function buildTournamentPanel(
     new ButtonBuilder()
       .setCustomId(`tournament:${instance.id}:review_team_submissions`)
       .setLabel("Review Team Submissions")
-      .setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder()
-      .setCustomId(`tournament:${instance.id}:approve_cashout_stage`)
-      .setLabel("Approve Cashout Stage")
-      .setStyle(ButtonStyle.Primary),
-    new ButtonBuilder()
-      .setCustomId(`tournament:${instance.id}:approve_final_round_stage`)
-      .setLabel("Approve Final Round Stage")
-      .setStyle(ButtonStyle.Primary)
+      .setStyle(ButtonStyle.Secondary)
   );
 
   const rowOne = new ActionRowBuilder<ButtonBuilder>().addComponents(rowOneButtons);
@@ -291,6 +303,10 @@ export async function buildTournamentPanel(
     new ButtonBuilder()
       .setCustomId(`tournament:${instance.id}:finalize_cycle`)
       .setLabel("Finalize Cycle")
+      .setStyle(ButtonStyle.Primary),
+    new ButtonBuilder()
+      .setCustomId(`tournament:${instance.id}:start_final_round`)
+      .setLabel("Start Final Round")
       .setStyle(ButtonStyle.Primary),
     new ButtonBuilder()
       .setCustomId(`tournament:${instance.id}:start_cycle_2`)
@@ -307,6 +323,14 @@ export async function buildTournamentPanel(
   );
 
   const rowThree = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`tournament:${instance.id}:approve_cashout_stage`)
+      .setLabel("Approve Cashout Stage")
+      .setStyle(ButtonStyle.Primary),
+    new ButtonBuilder()
+      .setCustomId(`tournament:${instance.id}:approve_final_round_stage`)
+      .setLabel("Approve Final Round Stage")
+      .setStyle(ButtonStyle.Primary),
     new ButtonBuilder()
       .setCustomId(`tournament:${instance.id}:refresh`)
       .setLabel("Refresh")

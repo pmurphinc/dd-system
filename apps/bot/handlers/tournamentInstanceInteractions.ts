@@ -22,7 +22,10 @@ import {
   getTeamLeaderAccessDebug,
   hasAdminInteractionAccess,
 } from "../helpers/permissions";
-import { upsertCashoutPlacement } from "../storage/cashoutPlacements";
+import {
+  getCashoutPlacementForCycle,
+  upsertCashoutPlacement,
+} from "../storage/cashoutPlacements";
 import {
   getMatchAssignmentById,
   listMatchAssignmentsForTournamentInstance,
@@ -40,8 +43,13 @@ import {
   getReportSubmissionById,
   getTeamStageSubmissionType,
   listCurrentStageTeamSubmissions,
+  reconcileFinalRoundFrpPair,
   rejectTeamStageSubmission,
 } from "../storage/reportSubmissions";
+import {
+  assignCashoutMapForCycleIfMissing,
+  assignFinalRoundMapsIfMissing,
+} from "../storage/tournamentMaps";
 import {
   closeTournamentCheckIn,
   finalizeTournamentCycle,
@@ -51,6 +59,7 @@ import {
   openTournamentCheckIn,
   reopenTournamentCheckIn,
   reopenTournamentCycle,
+  setTournamentInstanceFinalRoundReady,
   startTournamentCycle,
 } from "../storage/tournamentInstances";
 import {
@@ -277,24 +286,19 @@ function buildOfficialInputFromFrpPair(
     throw new Error("Final Round assignment is missing required team linkage.");
   }
 
-  const validPairs = new Set(["2:0", "2:1", "1:2", "0:2"]);
-  if (!validPairs.has(`${teamFrp}:${opponentFrp}`)) {
-    throw new Error(
-      `Invalid FRP pairing for ${assignment.teamName} vs ${assignment.opponentTeamName}: ${teamFrp}-${opponentFrp}.`
-    );
-  }
-
-  const winnerTeamId = teamFrp === 2 ? assignment.teamId : assignment.opponentTeamId;
-  const loserTeamId = winnerTeamId === assignment.teamId ? assignment.opponentTeamId : assignment.teamId;
-  const losingFrp = Math.min(teamFrp, opponentFrp);
+  const reconciliation = reconcileFinalRoundFrpPair(teamFrp, opponentFrp);
+  const winnerTeamId = reconciliation.winnerFromTeamSide
+    ? assignment.teamId
+    : assignment.opponentTeamId;
 
   return {
     tournamentInstanceId: assignment.tournamentInstanceId!,
     matchAssignmentId: assignment.id,
     round1WinnerTeamId: winnerTeamId,
     round2WinnerTeamId: winnerTeamId,
-    round3Played: losingFrp === 1,
-    round3WinnerTeamId: losingFrp === 1 ? loserTeamId : undefined,
+    round3Played: reconciliation.score === "2_1",
+    round3WinnerTeamId:
+      reconciliation.score === "2_1" ? winnerTeamId : undefined,
     enteredByDiscordUserId: actorDiscordUserId,
   };
 }
@@ -703,6 +707,7 @@ export async function handleTournamentInstanceButton(
         cycleNumber,
         interaction.user.id
       );
+      await assignCashoutMapForCycleIfMissing(instanceId, cycleNumber);
       const panel = await buildTournamentPanel(updated.id);
       await interaction.reply({
         content: `${updated.name} is ready for cycle ${cycleNumber} cashout.`,
@@ -750,6 +755,59 @@ export async function handleTournamentInstanceButton(
     } catch (error) {
       await interaction.reply({
         content: error instanceof Error ? error.message : "Failed to approve cashout stage.",
+        flags: MessageFlags.Ephemeral,
+      });
+    }
+
+    return true;
+  }
+
+  if (action === "start_final_round") {
+    try {
+      const instance = await getTournamentInstanceById(instanceId);
+      if (!instance || instance.currentCycle === null) {
+        throw new Error("This tournament instance is not in an active cycle.");
+      }
+
+      if (instance.currentStage !== TournamentStage.CASHOUT) {
+        throw new Error("Start Final Round is only available from CASHOUT stage.");
+      }
+
+      const placements = await listCurrentStageTeamSubmissions(
+        instanceId,
+        instance.currentCycle,
+        TournamentStage.CASHOUT
+      );
+      const approved = placements.filter((row) => row.status === "reviewed");
+      if (approved.length !== 4) {
+        throw new Error("Start Final Round requires four approved cashout submissions.");
+      }
+      const officialPlacements = await getCashoutPlacementForCycle(
+        instanceId,
+        instance.currentCycle
+      );
+      if (!officialPlacements) {
+        throw new Error(
+          "Start Final Round requires approved cashout stage placements. Run Approve Cashout Stage first."
+        );
+      }
+
+      const updated = await setTournamentInstanceFinalRoundReady(
+        instanceId,
+        instance.currentCycle,
+        interaction.user.id
+      );
+      await assignFinalRoundMapsIfMissing(instanceId, instance.currentCycle);
+
+      const panel = await buildTournamentPanel(updated.id);
+      await interaction.reply({
+        content: "Final Round started. Matchup maps assigned.",
+        ...panel,
+        flags: MessageFlags.Ephemeral,
+      });
+    } catch (error) {
+      await interaction.reply({
+        content: error instanceof Error ? error.message : "Failed to start Final Round.",
         flags: MessageFlags.Ephemeral,
       });
     }
