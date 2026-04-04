@@ -4,14 +4,15 @@ import {
   ButtonInteraction,
   ButtonStyle,
   EmbedBuilder,
+  MessageFlags,
   ModalBuilder,
   ModalSubmitInteraction,
   StringSelectMenuBuilder,
   StringSelectMenuInteraction,
   TextInputBuilder,
   TextInputStyle,
-  MessageFlags,
 } from "discord.js";
+import { TournamentStage } from "@prisma/client";
 import { buildTeamPanel } from "../helpers/teamPanel";
 import {
   buildTournamentInstancePicker,
@@ -21,55 +22,50 @@ import {
   getTeamLeaderAccessDebug,
   hasAdminInteractionAccess,
 } from "../helpers/permissions";
-import {
-  getTournamentInstanceById,
-  openTournamentCheckIn,
-  closeTournamentCheckIn,
-  handleTournamentLeaderCheckIn,
-  startTournamentCycle,
-  finalizeTournamentCycle,
-  finishTournamentInstance,
-  reopenTournamentCheckIn,
-  reopenTournamentCycle,
-} from "../storage/tournamentInstances";
-import {
-  getTeamByTournamentInstanceAndName,
-  getTeamById,
-  getTeamForUserInTournament,
-  listImportedTeamsForTournamentInstance,
-  setTeamCheckInStatus,
-} from "../storage/teams";
 import { upsertCashoutPlacement } from "../storage/cashoutPlacements";
 import {
   getMatchAssignmentById,
   listMatchAssignmentsForTournamentInstance,
 } from "../storage/matchAssignments";
 import {
-  createReportSubmission,
-  getPendingReportSubmissions,
-  hasPendingReportSubmissionForAssignment,
-} from "../storage/reportSubmissions";
-import {
+  getOfficialResultByMatchAssignmentId,
   recordOfficialMatchResult,
   voidOfficialMatchResult,
 } from "../storage/officialMatchResults";
-import { TournamentStage } from "@prisma/client";
+import {
+  approveTeamStageSubmission,
+  computeReservedCashoutPlacements,
+  createOrUpdateTeamStageSubmission,
+  getCurrentTeamStageSubmission,
+  getReportSubmissionById,
+  getTeamStageSubmissionType,
+  listCurrentStageTeamSubmissions,
+  rejectTeamStageSubmission,
+} from "../storage/reportSubmissions";
+import {
+  closeTournamentCheckIn,
+  finalizeTournamentCycle,
+  finishTournamentInstance,
+  getTournamentInstanceById,
+  handleTournamentLeaderCheckIn,
+  openTournamentCheckIn,
+  reopenTournamentCheckIn,
+  reopenTournamentCycle,
+  startTournamentCycle,
+} from "../storage/tournamentInstances";
+import {
+  getTeamById,
+  getTeamByTournamentInstanceAndName,
+  setTeamCheckInStatus,
+} from "../storage/teams";
 import { pushTournamentWebhookUpdate } from "../services/tournamentWebhook";
 
-type CashoutDraft = {
-  firstPlaceTeamId?: number;
-  secondPlaceTeamId?: number;
-  thirdPlaceTeamId?: number;
-  fourthPlaceTeamId?: number;
-};
-
-type FinalRoundScoreDraft = {
-  winnerTeamId?: number;
-  losingTeamFrp?: 0 | 1;
-};
-
-const cashoutPlacementDrafts = new Map<number, CashoutDraft>();
-const finalRoundScoreDrafts = new Map<string, FinalRoundScoreDraft>();
+type TeamButtonAction =
+  | "checkin"
+  | "submit_cashout"
+  | "edit_cashout"
+  | "submit_final_round"
+  | "edit_final_round";
 
 function parseTournamentButton(customId: string) {
   const [, instanceIdRaw, action] = customId.split(":");
@@ -79,358 +75,389 @@ function parseTournamentButton(customId: string) {
   };
 }
 
-function parseTeamButton(customId: string) {
+function parseTeamButton(customId: string): {
+  action: TeamButtonAction;
+  instanceId: number;
+  teamId: number;
+} {
   const [, action, instanceIdRaw, teamIdRaw] = customId.split(":");
   return {
-    action,
+    action: action as TeamButtonAction,
     instanceId: Number(instanceIdRaw),
     teamId: Number(teamIdRaw),
   };
 }
 
-function getCashoutDraft(instanceId: number): CashoutDraft {
-  return cashoutPlacementDrafts.get(instanceId) ?? {};
+function formatStageSubmissionStatus(status: string): string {
+  if (status === "pending") return "pending";
+  if (status === "reviewed") return "approved";
+  return "rejected";
 }
 
-function setCashoutDraftValue(
+function userHasTeamAccess(
+  userId: string,
+  team: Awaited<ReturnType<typeof getTeamById>>,
+  roleIds: Set<string>
+): boolean {
+  if (!team) {
+    return false;
+  }
+
+  if (team.leaderDiscordUserId === userId) {
+    return true;
+  }
+
+  if (team.members.some((member) => member.discordUserId === userId)) {
+    return true;
+  }
+
+  return team.discordRoleId ? roleIds.has(team.discordRoleId) : false;
+}
+
+async function buildCashoutTeamSelectReply(
   instanceId: number,
-  place: 1 | 2 | 3 | 4,
-  teamId: number
+  teamId: number,
+  editing: boolean
 ) {
-  const current = getCashoutDraft(instanceId);
-
-  const updated: CashoutDraft = {
-    ...current,
-  };
-
-  if (place === 1) updated.firstPlaceTeamId = teamId;
-  else if (place === 2) updated.secondPlaceTeamId = teamId;
-  else if (place === 3) updated.thirdPlaceTeamId = teamId;
-  else updated.fourthPlaceTeamId = teamId;
-
-  cashoutPlacementDrafts.set(instanceId, updated);
-}
-
-function clearCashoutDraft(instanceId: number) {
-  cashoutPlacementDrafts.delete(instanceId);
-}
-
-function parseCashoutSelectCustomId(customId: string) {
-  const [, action, placeRaw, instanceIdRaw] = customId.split(":");
-
-  return {
-    action,
-    place: Number(placeRaw) as 1 | 2 | 3 | 4,
-    instanceId: Number(instanceIdRaw),
-  };
-}
-
-function parseCashoutConfirmCustomId(customId: string) {
-  const [, action, instanceIdRaw] = customId.split(":");
-
-  return {
-    action,
-    instanceId: Number(instanceIdRaw),
-  };
-}
-
-function getPlacementLabel(place: 1 | 2 | 3 | 4): string {
-  if (place === 1) return "1st Place";
-  if (place === 2) return "2nd Place";
-  if (place === 3) return "3rd Place";
-  return "4th Place";
-}
-
-function buildCashoutPlacementSummary(
-  teams: Awaited<ReturnType<typeof listImportedTeamsForTournamentInstance>>,
-  draft: CashoutDraft
-) {
-  const findName = (teamId?: number) =>
-    teamId
-      ? teams.find((team) => team.id === teamId)?.teamName ?? `Unknown (${teamId})`
-      : "Not selected";
-
-  return [
-    `1st: ${findName(draft.firstPlaceTeamId)}`,
-    `2nd: ${findName(draft.secondPlaceTeamId)}`,
-    `3rd: ${findName(draft.thirdPlaceTeamId)}`,
-    `4th: ${findName(draft.fourthPlaceTeamId)}`,
-  ].join("\n");
-}
-
-function buildCashoutPlacementComponents(
-  instanceId: number,
-  teams: Awaited<ReturnType<typeof listImportedTeamsForTournamentInstance>>,
-  draft: CashoutDraft
-) {
-  const buildMenuRow = (place: 1 | 2 | 3 | 4) => {
-    const selectedValue =
-      place === 1
-        ? draft.firstPlaceTeamId
-        : place === 2
-          ? draft.secondPlaceTeamId
-          : place === 3
-            ? draft.thirdPlaceTeamId
-            : draft.fourthPlaceTeamId;
-
-    const menu = new StringSelectMenuBuilder()
-      .setCustomId(`tournament:cashout_select:${place}:${instanceId}`)
-      .setPlaceholder(`Select ${getPlacementLabel(place)}`)
-      .addOptions(
-        teams.map((team) => ({
-          label: team.teamName.slice(0, 100),
-          value: `${team.id}`,
-          default: selectedValue === team.id,
-        }))
-      );
-
-    return new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(menu);
-  };
-
-  const draftValues = [
-    draft.firstPlaceTeamId,
-    draft.secondPlaceTeamId,
-    draft.thirdPlaceTeamId,
-    draft.fourthPlaceTeamId,
-  ].filter((value): value is number => Number.isFinite(value));
-
-  const canSubmit = draftValues.length === 4;
-
-  const confirmRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder()
-      .setCustomId(`tournament:cashout_confirm:${instanceId}`)
-      .setLabel("Submit Cashout Placements")
-      .setStyle(ButtonStyle.Success)
-      .setDisabled(!canSubmit),
-    new ButtonBuilder()
-      .setCustomId(`tournament:${instanceId}:refresh`)
-      .setLabel("Back to Tournament Panel")
-      .setStyle(ButtonStyle.Secondary)
-  );
-
-  return [
-    buildMenuRow(1),
-    buildMenuRow(2),
-    buildMenuRow(3),
-    buildMenuRow(4),
-    confirmRow,
-  ];
-}
-
-async function buildCashoutPlacementReply(instanceId: number) {
   const instance = await getTournamentInstanceById(instanceId);
 
   if (!instance || instance.currentCycle === null) {
     throw new Error("This tournament instance is not in an active cycle.");
   }
 
-  const teams = await listImportedTeamsForTournamentInstance(instanceId);
-
-  if (teams.length !== 4) {
-    throw new Error(
-      `Cashout placements require exactly 4 assigned teams. Found ${teams.length}.`
-    );
+  if (instance.currentStage !== TournamentStage.CASHOUT) {
+    throw new Error("Cashout submissions are only available during CASHOUT.");
   }
 
-  const draft = getCashoutDraft(instanceId);
+  const existing = await getCurrentTeamStageSubmission(
+    instanceId,
+    teamId,
+    instance.currentCycle,
+    TournamentStage.CASHOUT
+  );
 
-  const embed = new EmbedBuilder()
-    .setTitle(`Cashout Placements: ${instance.name}`)
-    .setDescription(
-      `Select the placements for cycle ${instance.currentCycle}.\n\n${buildCashoutPlacementSummary(
-        teams,
-        draft
-      )}`
-    );
+  if (existing?.status === "reviewed") {
+    throw new Error("Your approved cashout placement is locked.");
+  }
+
+  if (editing && !existing) {
+    throw new Error("No editable cashout submission exists for your team.");
+  }
+
+  const reservedPlacements = await computeReservedCashoutPlacements(
+    instanceId,
+    instance.currentCycle,
+    teamId
+  );
+
+  const currentPlacement = existing ? Number(existing.score) : null;
+  const options = [1, 2, 3, 4]
+    .filter((placement) => !reservedPlacements.includes(placement) || placement === currentPlacement)
+    .map((placement) => ({
+      label: `${placement}${placement === 1 ? "st" : placement === 2 ? "nd" : placement === 3 ? "rd" : "th"}`,
+      value: `${placement}`,
+      default: currentPlacement === placement,
+    }));
+
+  if (options.length === 0) {
+    throw new Error("No placements are available. Ask an admin to review/reopen submissions.");
+  }
+
+  const menu = new StringSelectMenuBuilder()
+    .setCustomId(`team:cashout_select:${instanceId}:${teamId}`)
+    .setPlaceholder("Select your team cashout placement")
+    .addOptions(options);
 
   return {
-    embeds: [embed],
-    components: buildCashoutPlacementComponents(instanceId, teams, draft),
+    content: editing
+      ? "Edit your pending/rejected cashout placement."
+      : "Submit your team cashout placement.",
+    components: [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(menu)],
   };
 }
 
-function validateCashoutDraft(
-  teams: Awaited<ReturnType<typeof listImportedTeamsForTournamentInstance>>,
-  draft: CashoutDraft
+async function buildFinalRoundTeamSelectReply(
+  instanceId: number,
+  teamId: number,
+  editing: boolean
 ) {
-  const required = [
-    draft.firstPlaceTeamId,
-    draft.secondPlaceTeamId,
-    draft.thirdPlaceTeamId,
-    draft.fourthPlaceTeamId,
-  ];
+  const instance = await getTournamentInstanceById(instanceId);
 
-  if (required.some((value) => !Number.isFinite(value))) {
-    throw new Error("All 4 placements must be selected before submitting.");
+  if (!instance || instance.currentCycle === null) {
+    throw new Error("This tournament instance is not in an active cycle.");
   }
 
-  const selectedIds = required as number[];
-  const uniqueIds = new Set(selectedIds);
-
-  if (uniqueIds.size !== 4) {
-    throw new Error("Each placement must be assigned to a different team.");
+  if (instance.currentStage !== TournamentStage.FINAL_ROUND) {
+    throw new Error("Final Round submissions are only available during FINAL_ROUND.");
   }
 
-  const validTeamIds = new Set(teams.map((team) => team.id));
-  const invalid = selectedIds.find((teamId) => !validTeamIds.has(teamId));
+  const assignment = (
+    await listMatchAssignmentsForTournamentInstance(
+      instanceId,
+      instance.currentCycle,
+      TournamentStage.FINAL_ROUND
+    )
+  ).find((row) => row.teamId === teamId || row.opponentTeamId === teamId);
 
-  if (invalid) {
-    throw new Error(`Selected team ${invalid} does not belong to this tournament instance.`);
+  if (!assignment) {
+    throw new Error("No Final Round assignment is available for your team.");
   }
+
+  const existing = await getCurrentTeamStageSubmission(
+    instanceId,
+    teamId,
+    instance.currentCycle,
+    TournamentStage.FINAL_ROUND
+  );
+
+  if (existing?.status === "reviewed") {
+    throw new Error("Your approved Final Round submission is locked.");
+  }
+
+  if (editing && !existing) {
+    throw new Error("No editable Final Round submission exists for your team.");
+  }
+
+  const currentFrp = existing ? Number(existing.score) : null;
+  const menu = new StringSelectMenuBuilder()
+    .setCustomId(`team:final_round_select:${instanceId}:${teamId}`)
+    .setPlaceholder("Select your team Final Round FRP")
+    .addOptions(
+      [0, 1, 2].map((frp) => ({
+        label: `${frp} FRP`,
+        value: `${frp}`,
+        default: currentFrp === frp,
+      }))
+    );
 
   return {
-    firstPlaceTeamId: draft.firstPlaceTeamId as number,
-    secondPlaceTeamId: draft.secondPlaceTeamId as number,
-    thirdPlaceTeamId: draft.thirdPlaceTeamId as number,
-    fourthPlaceTeamId: draft.fourthPlaceTeamId as number,
+    content: editing
+      ? "Edit your pending/rejected Final Round FRP submission."
+      : "Submit your team Final Round FRP.",
+    components: [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(menu)],
   };
 }
 
-function getFinalRoundScoreDraft(
-  instanceId: number,
-  assignmentId: number
-): FinalRoundScoreDraft {
-  return finalRoundScoreDrafts.get(`${instanceId}:${assignmentId}`) ?? {};
-}
+async function approveCashoutStage(instanceId: number, actorDiscordUserId: string) {
+  const instance = await getTournamentInstanceById(instanceId);
 
-function setFinalRoundScoreDraftValue(
-  instanceId: number,
-  assignmentId: number,
-  updates: Partial<FinalRoundScoreDraft>
-) {
-  const key = `${instanceId}:${assignmentId}`;
-  const current = getFinalRoundScoreDraft(instanceId, assignmentId);
+  if (!instance || instance.currentCycle === null) {
+    throw new Error("This tournament instance is not in an active cycle.");
+  }
 
-  finalRoundScoreDrafts.set(key, {
-    ...current,
-    ...updates,
+  if (instance.currentStage !== TournamentStage.CASHOUT) {
+    throw new Error("Approve Cashout Stage is only available during CASHOUT.");
+  }
+
+  const submissions = await listCurrentStageTeamSubmissions(
+    instanceId,
+    instance.currentCycle,
+    TournamentStage.CASHOUT
+  );
+
+  const approved = submissions.filter((row) => row.status === "reviewed");
+  if (approved.length !== 4) {
+    throw new Error("Four approved cashout placements are required before stage approval.");
+  }
+
+  const values = approved.map((row) => Number(row.score));
+  const uniqueValues = new Set(values);
+  if (uniqueValues.size !== 4 || values.some((value) => ![1, 2, 3, 4].includes(value))) {
+    throw new Error("Approved cashout placements must be unique values from 1st to 4th.");
+  }
+
+  const byPlacement = new Map<number, number>();
+  for (const submission of approved) {
+    if (submission.teamId === null) {
+      throw new Error("Found approved placement missing team linkage.");
+    }
+
+    byPlacement.set(Number(submission.score), submission.teamId);
+  }
+
+  await upsertCashoutPlacement({
+    tournamentInstanceId: instanceId,
+    cycleNumber: instance.currentCycle,
+    firstPlaceTeamId: byPlacement.get(1)!,
+    secondPlaceTeamId: byPlacement.get(2)!,
+    thirdPlaceTeamId: byPlacement.get(3)!,
+    fourthPlaceTeamId: byPlacement.get(4)!,
+    actorDiscordUserId,
   });
 }
 
-function clearFinalRoundScoreDraft(instanceId: number, assignmentId: number) {
-  finalRoundScoreDrafts.delete(`${instanceId}:${assignmentId}`);
-}
-
-function parseScoreWinnerSelectCustomId(customId: string) {
-  const [, action, instanceIdRaw, assignmentIdRaw] = customId.split(":");
-  return {
-    action,
-    instanceId: Number(instanceIdRaw),
-    assignmentId: Number(assignmentIdRaw),
-  };
-}
-
-function parseScoreLoserFrpSelectCustomId(customId: string) {
-  const [, action, instanceIdRaw, assignmentIdRaw] = customId.split(":");
-  return {
-    action,
-    instanceId: Number(instanceIdRaw),
-    assignmentId: Number(assignmentIdRaw),
-  };
-}
-
-function parseScoreConfirmCustomId(customId: string) {
-  const [, action, instanceIdRaw, assignmentIdRaw] = customId.split(":");
-  return {
-    action,
-    instanceId: Number(instanceIdRaw),
-    assignmentId: Number(assignmentIdRaw),
-  };
-}
-
-async function buildFinalRoundScoreReply(instanceId: number, assignmentId: number) {
-  const assignment = await getMatchAssignmentById(assignmentId);
-
-  if (!assignment || assignment.tournamentInstanceId !== instanceId) {
-    throw new Error("Final Round assignment not found.");
+function buildOfficialInputFromFrpPair(
+  assignment: Awaited<ReturnType<typeof getMatchAssignmentById>>,
+  teamFrp: number,
+  opponentFrp: number,
+  actorDiscordUserId: string
+) {
+  if (!assignment || assignment.teamId === null || assignment.opponentTeamId === null) {
+    throw new Error("Final Round assignment is missing required team linkage.");
   }
 
-  const draft = getFinalRoundScoreDraft(instanceId, assignmentId);
-
-  const winnerOptions = [
-    {
-      label: assignment.teamName.slice(0, 100),
-      value: `${assignment.teamId}`,
-      default: draft.winnerTeamId === assignment.teamId,
-    },
-    {
-      label: assignment.opponentTeamName.slice(0, 100),
-      value: `${assignment.opponentTeamId}`,
-      default: draft.winnerTeamId === assignment.opponentTeamId,
-    },
-  ];
-
-  const loserFrpOptions = [
-    {
-      label: "0 FRP (winner won 2-0)",
-      value: "0",
-      default: draft.losingTeamFrp === 0,
-    },
-    {
-      label: "1 FRP (winner won 2-1)",
-      value: "1",
-      default: draft.losingTeamFrp === 1,
-    },
-  ];
-
-  const winnerLabel =
-    draft.winnerTeamId === assignment.teamId
-      ? assignment.teamName
-      : draft.winnerTeamId === assignment.opponentTeamId
-        ? assignment.opponentTeamName
-        : "Not selected";
-
-  const loserFrpLabel =
-    draft.losingTeamFrp === 0 || draft.losingTeamFrp === 1
-      ? `${draft.losingTeamFrp}`
-      : "Not selected";
-
-  const canSubmit =
-    Number.isFinite(draft.winnerTeamId) &&
-    (draft.losingTeamFrp === 0 || draft.losingTeamFrp === 1);
-
-  const embed = new EmbedBuilder()
-    .setTitle("Final Round Score")
-    .setDescription(
-      [
-        `Match: ${assignment.teamName} vs ${assignment.opponentTeamName}`,
-        `Winner: ${winnerLabel}`,
-        `Losing Team FRP: ${loserFrpLabel}`,
-        "",
-        "Winner automatically receives 2 FRP.",
-      ].join("\n")
+  const validPairs = new Set(["2:0", "2:1", "1:2", "0:2"]);
+  if (!validPairs.has(`${teamFrp}:${opponentFrp}`)) {
+    throw new Error(
+      `Invalid FRP pairing for ${assignment.teamName} vs ${assignment.opponentTeamName}: ${teamFrp}-${opponentFrp}.`
     );
+  }
 
-  const winnerMenu = new StringSelectMenuBuilder()
-    .setCustomId(`tournament:score_winner:${instanceId}:${assignmentId}`)
-    .setPlaceholder("Who Won?")
-    .addOptions(winnerOptions);
-
-  const loserFrpMenu = new StringSelectMenuBuilder()
-    .setCustomId(`tournament:score_loser_frp:${instanceId}:${assignmentId}`)
-    .setPlaceholder("How many FRP for losing team?")
-    .addOptions(loserFrpOptions);
-
-  const buttons = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder()
-      .setCustomId(`tournament:score_confirm:${instanceId}:${assignmentId}`)
-      .setLabel("Submit Official Score")
-      .setStyle(ButtonStyle.Success)
-      .setDisabled(!canSubmit),
-    new ButtonBuilder()
-      .setCustomId(`tournament:${instanceId}:refresh`)
-      .setLabel("Back to Tournament Panel")
-      .setStyle(ButtonStyle.Secondary)
-  );
+  const winnerTeamId = teamFrp === 2 ? assignment.teamId : assignment.opponentTeamId;
+  const loserTeamId = winnerTeamId === assignment.teamId ? assignment.opponentTeamId : assignment.teamId;
+  const losingFrp = Math.min(teamFrp, opponentFrp);
 
   return {
-    embeds: [embed],
-    components: [
-      new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(winnerMenu),
-      new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(loserFrpMenu),
-      buttons,
-    ],
+    tournamentInstanceId: assignment.tournamentInstanceId!,
+    matchAssignmentId: assignment.id,
+    round1WinnerTeamId: winnerTeamId,
+    round2WinnerTeamId: winnerTeamId,
+    round3Played: losingFrp === 1,
+    round3WinnerTeamId: losingFrp === 1 ? loserTeamId : undefined,
+    enteredByDiscordUserId: actorDiscordUserId,
   };
+}
+
+async function approveFinalRoundStage(instanceId: number, actorDiscordUserId: string) {
+  const instance = await getTournamentInstanceById(instanceId);
+
+  if (!instance || instance.currentCycle === null) {
+    throw new Error("This tournament instance is not in an active cycle.");
+  }
+
+  if (instance.currentStage !== TournamentStage.FINAL_ROUND) {
+    throw new Error("Approve Final Round Stage is only available during FINAL_ROUND.");
+  }
+
+  const assignments = await listMatchAssignmentsForTournamentInstance(
+    instanceId,
+    instance.currentCycle,
+    TournamentStage.FINAL_ROUND
+  );
+
+  if (assignments.length !== 2) {
+    throw new Error("Both Final Round matchups must exist before approval.");
+  }
+
+  const submissions = await listCurrentStageTeamSubmissions(
+    instanceId,
+    instance.currentCycle,
+    TournamentStage.FINAL_ROUND
+  );
+
+  for (const assignment of assignments) {
+    if (assignment.teamId === null || assignment.opponentTeamId === null) {
+      throw new Error("Final Round assignment has missing team linkage.");
+    }
+
+    const teamSub = submissions.find(
+      (row) => row.teamId === assignment.teamId && row.status === "reviewed"
+    );
+    const opponentSub = submissions.find(
+      (row) => row.teamId === assignment.opponentTeamId && row.status === "reviewed"
+    );
+
+    if (!teamSub || !opponentSub) {
+      throw new Error(
+        `Both teams in ${assignment.teamName} vs ${assignment.opponentTeamName} require approved submissions.`
+      );
+    }
+
+    const existing = await getOfficialResultByMatchAssignmentId(assignment.id);
+    if (existing?.status === "active") {
+      continue;
+    }
+
+    await recordOfficialMatchResult(
+      buildOfficialInputFromFrpPair(
+        assignment,
+        Number(teamSub.score),
+        Number(opponentSub.score),
+        actorDiscordUserId
+      )
+    );
+  }
+}
+
+async function buildTeamSubmissionReviewReply(instanceId: number) {
+  const instance = await getTournamentInstanceById(instanceId);
+
+  if (!instance || instance.currentCycle === null) {
+    throw new Error("This tournament instance is not in an active cycle.");
+  }
+
+  if (
+    instance.currentStage !== TournamentStage.CASHOUT &&
+    instance.currentStage !== TournamentStage.FINAL_ROUND
+  ) {
+    throw new Error("Review is available only in CASHOUT or FINAL_ROUND stages.");
+  }
+
+  const submissions = await listCurrentStageTeamSubmissions(
+    instanceId,
+    instance.currentCycle,
+    instance.currentStage
+  );
+
+  if (submissions.length === 0) {
+    return {
+      embeds: [
+        new EmbedBuilder()
+          .setTitle("Team Submissions")
+          .setDescription("No team submissions found for current stage."),
+      ],
+      components: [],
+    };
+  }
+
+  const menu = new StringSelectMenuBuilder()
+    .setCustomId(`tournament:select_team_submission:${instanceId}`)
+    .setPlaceholder("Select a team submission to review")
+    .addOptions(
+      submissions.map((submission) => ({
+        label: `${submission.teamName} (${submission.score})`.slice(0, 100),
+        description: `${submission.stageName} | ${formatStageSubmissionStatus(submission.status)}`.slice(
+          0,
+          100
+        ),
+        value: `${submission.id}`,
+      }))
+    );
+
+  return {
+    embeds: [
+      new EmbedBuilder()
+        .setTitle("Team Submissions")
+        .setDescription(
+          submissions
+            .map(
+              (submission) =>
+                `${submission.teamName}: ${submission.score} (${formatStageSubmissionStatus(
+                  submission.status
+                )})`
+            )
+            .join("\n")
+        ),
+    ],
+    components: [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(menu)],
+  };
+}
+
+function buildSubmissionActionRow(instanceId: number, submissionId: number) {
+  return new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`tournament:approve_submission:${instanceId}:${submissionId}`)
+      .setLabel("Approve Submission")
+      .setStyle(ButtonStyle.Success),
+    new ButtonBuilder()
+      .setCustomId(`tournament:reject_submission:${instanceId}:${submissionId}`)
+      .setLabel("Reject Submission")
+      .setStyle(ButtonStyle.Danger),
+    new ButtonBuilder()
+      .setCustomId(`tournament:${instanceId}:refresh`)
+      .setLabel("Back")
+      .setStyle(ButtonStyle.Secondary)
+  );
 }
 
 export async function handleTournamentInstanceButton(
@@ -487,13 +514,13 @@ export async function handleTournamentInstanceButton(
     }
 
     const { action, instanceId, teamId } = parseTeamButton(interaction.customId);
-    const team = await getTeamForUserInTournament(
-      interaction.user.id,
-      instanceId,
-      interaction.member.roles
-    );
-
-    if (!team || team.id !== teamId) {
+    const team = await getTeamById(teamId);
+    const roleIds = new Set(Array.from(interaction.member.roles.cache.keys()));
+    if (
+      !team ||
+      team.tournamentInstanceId !== instanceId ||
+      !userHasTeamAccess(interaction.user.id, team, roleIds)
+    ) {
       await interaction.reply({
         content: "You do not belong to this tournament team.",
         flags: MessageFlags.Ephemeral,
@@ -542,49 +569,53 @@ export async function handleTournamentInstanceButton(
       return true;
     }
 
-    if (action === "report") {
-      const instance = await getTournamentInstanceById(instanceId);
-      const assignments = instance
-        ? await listMatchAssignmentsForTournamentInstance(
-            instanceId,
-            instance.currentCycle ?? undefined,
-            TournamentStage.FINAL_ROUND
-          )
-        : [];
-      const assignment = assignments.find(
-        (row) => row.teamId === team.id || row.opponentTeamId === team.id
-      );
+    if (action === "submit_cashout" || action === "edit_cashout") {
+      try {
+        const reply = await buildCashoutTeamSelectReply(
+          instanceId,
+          team.id,
+          action === "edit_cashout"
+        );
 
-      if (!instance || !assignment) {
         await interaction.reply({
-          content: "No Final Round assignment is available for your team.",
+          ...reply,
           flags: MessageFlags.Ephemeral,
         });
-        return true;
+      } catch (error) {
+        await interaction.reply({
+          content:
+            error instanceof Error
+              ? error.message
+              : "Failed to open cashout submission flow.",
+          flags: MessageFlags.Ephemeral,
+        });
       }
 
-      const modal = new ModalBuilder()
-        .setCustomId(`team:report_modal:${instanceId}:${team.id}:${assignment.id}`)
-        .setTitle(`Informational Report: ${team.teamName}`.slice(0, 45));
+      return true;
+    }
 
-      const scoreInput = new TextInputBuilder()
-        .setCustomId("score")
-        .setLabel("Reported BO3 Score")
-        .setStyle(TextInputStyle.Short)
-        .setPlaceholder("2-0, 2-1, 1-2, 0-2")
-        .setRequired(true);
+    if (action === "submit_final_round" || action === "edit_final_round") {
+      try {
+        const reply = await buildFinalRoundTeamSelectReply(
+          instanceId,
+          team.id,
+          action === "edit_final_round"
+        );
 
-      const notesInput = new TextInputBuilder()
-        .setCustomId("notes")
-        .setLabel("Notes")
-        .setStyle(TextInputStyle.Paragraph)
-        .setRequired(false);
+        await interaction.reply({
+          ...reply,
+          flags: MessageFlags.Ephemeral,
+        });
+      } catch (error) {
+        await interaction.reply({
+          content:
+            error instanceof Error
+              ? error.message
+              : "Failed to open final round submission flow.",
+          flags: MessageFlags.Ephemeral,
+        });
+      }
 
-      modal.addComponents(
-        new ActionRowBuilder<TextInputBuilder>().addComponents(scoreInput),
-        new ActionRowBuilder<TextInputBuilder>().addComponents(notesInput)
-      );
-      await interaction.showModal(modal);
       return true;
     }
   }
@@ -601,105 +632,47 @@ export async function handleTournamentInstanceButton(
     return true;
   }
 
-  if (interaction.customId.startsWith("tournament:cashout_confirm:")) {
-    const { instanceId } = parseCashoutConfirmCustomId(interaction.customId);
+  if (interaction.customId.startsWith("tournament:approve_submission:")) {
+    const [, , instanceIdRaw, submissionIdRaw] = interaction.customId.split(":");
+    const instanceId = Number(instanceIdRaw);
+    const submissionId = Number(submissionIdRaw);
 
     try {
-      const instance = await getTournamentInstanceById(instanceId);
-
-      if (!instance || instance.currentCycle === null) {
-        throw new Error("This tournament instance is not in an active cycle.");
-      }
-
-      const teams = await listImportedTeamsForTournamentInstance(instanceId);
-      const draft = getCashoutDraft(instanceId);
-      const validated = validateCashoutDraft(teams, draft);
-
-      await upsertCashoutPlacement({
-        tournamentInstanceId: instanceId,
-        cycleNumber: instance.currentCycle,
-        firstPlaceTeamId: validated.firstPlaceTeamId,
-        secondPlaceTeamId: validated.secondPlaceTeamId,
-        thirdPlaceTeamId: validated.thirdPlaceTeamId,
-        fourthPlaceTeamId: validated.fourthPlaceTeamId,
-        actorDiscordUserId: interaction.user.id,
-      });
-
-      clearCashoutDraft(instanceId);
-
-      const panel = await buildTournamentPanel(instanceId);
+      await approveTeamStageSubmission(submissionId, interaction.user.id);
+      const review = await buildTeamSubmissionReviewReply(instanceId);
       await interaction.reply({
-        content: "Cashout placements recorded and Final Round pairings created automatically.",
-        ...panel,
+        content: "Team submission approved.",
+        ...review,
         flags: MessageFlags.Ephemeral,
       });
     } catch (error) {
       await interaction.reply({
-        content:
-          error instanceof Error
-            ? error.message
-            : "Failed to record cashout placements.",
+        content: error instanceof Error ? error.message : "Failed to approve submission.",
         flags: MessageFlags.Ephemeral,
       });
     }
+
     return true;
   }
 
-  if (interaction.customId.startsWith("tournament:score_confirm:")) {
-    const { instanceId, assignmentId } = parseScoreConfirmCustomId(interaction.customId);
+  if (interaction.customId.startsWith("tournament:reject_submission:")) {
+    const [, , instanceIdRaw, submissionIdRaw] = interaction.customId.split(":");
+    const instanceId = Number(instanceIdRaw);
+    const submissionId = Number(submissionIdRaw);
 
-    try {
-      const assignment = await getMatchAssignmentById(assignmentId);
+    const modal = new ModalBuilder()
+      .setCustomId(`tournament:reject_submission_modal:${instanceId}:${submissionId}`)
+      .setTitle("Reject Team Submission");
 
-      if (!assignment || assignment.tournamentInstanceId !== instanceId) {
-        throw new Error("Final Round assignment not found.");
-      }
+    const reasonInput = new TextInputBuilder()
+      .setCustomId("reject_reason")
+      .setLabel("Rejection reason")
+      .setPlaceholder("Short reason shown in audit trail")
+      .setStyle(TextInputStyle.Paragraph)
+      .setRequired(true);
 
-      const draft = getFinalRoundScoreDraft(instanceId, assignmentId);
-
-      if (!Number.isFinite(draft.winnerTeamId)) {
-        throw new Error("Select the winning team first.");
-      }
-
-      if (draft.losingTeamFrp !== 0 && draft.losingTeamFrp !== 1) {
-        throw new Error("Select the losing team's FRP first.");
-      }
-
-      const winnerTeamId = draft.winnerTeamId as number;
-      const loserTeamId =
-        winnerTeamId === assignment.teamId
-          ? assignment.opponentTeamId
-          : assignment.teamId;
-
-      const round3Played = draft.losingTeamFrp === 1;
-      const round3WinnerTeamId =
-        round3Played && typeof loserTeamId === "number" ? loserTeamId : undefined;
-
-      await recordOfficialMatchResult({
-        tournamentInstanceId: instanceId,
-        matchAssignmentId: assignmentId,
-        round1WinnerTeamId: winnerTeamId,
-        round2WinnerTeamId: winnerTeamId,
-        round3Played,
-        round3WinnerTeamId,
-        enteredByDiscordUserId: interaction.user.id,
-      });
-
-      clearFinalRoundScoreDraft(instanceId, assignmentId);
-
-      const panel = await buildTournamentPanel(instanceId);
-      await interaction.reply({
-        content: "Official Final Round score recorded.",
-        ...panel,
-        flags: MessageFlags.Ephemeral,
-      });
-    } catch (error) {
-      await interaction.reply({
-        content: error instanceof Error ? error.message : "Failed to record official score.",
-        flags: MessageFlags.Ephemeral,
-      });
-    }
-
+    modal.addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(reasonInput));
+    await interaction.showModal(modal);
     return true;
   }
 
@@ -764,12 +737,11 @@ export async function handleTournamentInstanceButton(
     return true;
   }
 
-  if (action === "enter_cashout") {
+  if (action === "review_team_submissions") {
     try {
-      const reply = await buildCashoutPlacementReply(instanceId);
+      const review = await buildTeamSubmissionReviewReply(instanceId);
       await interaction.reply({
-        content: "Select the Cashout placements for this cycle.",
-        ...reply,
+        ...review,
         flags: MessageFlags.Ephemeral,
       });
     } catch (error) {
@@ -777,70 +749,50 @@ export async function handleTournamentInstanceButton(
         content:
           error instanceof Error
             ? error.message
-            : "Failed to open cashout placement entry.",
+            : "Failed to open team submissions review.",
         flags: MessageFlags.Ephemeral,
       });
     }
+
     return true;
   }
 
-  if (action === "enter_score") {
-    const instance = await getTournamentInstanceById(instanceId);
-    const assignments = await listMatchAssignmentsForTournamentInstance(
-      instanceId,
-      instance?.currentCycle ?? undefined,
-      TournamentStage.FINAL_ROUND
-    );
-
-    if (assignments.length === 0) {
+  if (action === "approve_cashout_stage") {
+    try {
+      await approveCashoutStage(instanceId, interaction.user.id);
+      const panel = await buildTournamentPanel(instanceId);
       await interaction.reply({
-        content: "No Final Round assignments are available for this instance.",
+        content: "Cashout stage approved. Official placements and final round pairings are ready.",
+        ...panel,
         flags: MessageFlags.Ephemeral,
       });
-      return true;
+    } catch (error) {
+      await interaction.reply({
+        content: error instanceof Error ? error.message : "Failed to approve cashout stage.",
+        flags: MessageFlags.Ephemeral,
+      });
     }
 
-    const menu = new StringSelectMenuBuilder()
-      .setCustomId(`tournament:select_score_assignment:${instanceId}`)
-      .setPlaceholder("Select a Final Round match")
-      .addOptions(
-        assignments.map((assignment) => ({
-          label: `${assignment.teamName} vs ${assignment.opponentTeamName}`.slice(0, 100),
-          description: `Cycle ${assignment.cycleNumber} | ${assignment.bracketLabel ?? "match"}`.slice(
-            0,
-            100
-          ),
-          value: `${assignment.id}`,
-        }))
-      );
-
-    await interaction.reply({
-      content: "Select the Final Round match to score officially.",
-      components: [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(menu)],
-      flags: MessageFlags.Ephemeral,
-    });
     return true;
   }
 
-  if (action === "review_pending_results") {
-    const pendingReports = await getPendingReportSubmissions(20, instanceId);
-    const embed = new EmbedBuilder()
-      .setTitle("Pending Informational Results")
-      .setDescription(
-        pendingReports.length > 0
-          ? pendingReports
-              .map(
-                (report) =>
-                  `${report.teamName} vs ${report.opponentTeamName} | ${report.score} | ${report.notes || "no notes"}`
-              )
-              .join("\n")
-          : "No pending informational team-leader results."
-      );
+  if (action === "approve_final_round_stage") {
+    try {
+      await approveFinalRoundStage(instanceId, interaction.user.id);
+      const panel = await buildTournamentPanel(instanceId);
+      await interaction.reply({
+        content: "Final Round stage approved. Official match results reconciled from team submissions.",
+        ...panel,
+        flags: MessageFlags.Ephemeral,
+      });
+    } catch (error) {
+      await interaction.reply({
+        content:
+          error instanceof Error ? error.message : "Failed to approve final round stage.",
+        flags: MessageFlags.Ephemeral,
+      });
+    }
 
-    await interaction.reply({
-      embeds: [embed],
-      flags: MessageFlags.Ephemeral,
-    });
     return true;
   }
 
@@ -934,192 +886,21 @@ export async function handleTournamentInstanceSelectMenu(
     return true;
   }
 
-  if (interaction.customId.startsWith("tournament:cashout_select:")) {
-    if (!(await hasAdminInteractionAccess(interaction))) {
-      await interaction.reply({
-        content: "You do not have permission to use this action.",
-        flags: MessageFlags.Ephemeral,
-      });
-      return true;
-    }
-
-    const { place, instanceId } = parseCashoutSelectCustomId(interaction.customId);
-    const selectedTeamId = Number(interaction.values[0]);
-
-    if (!Number.isFinite(selectedTeamId)) {
-      await interaction.reply({
-        content: "Invalid team selection.",
-        flags: MessageFlags.Ephemeral,
-      });
-      return true;
-    }
-
-    try {
-      const teams = await listImportedTeamsForTournamentInstance(instanceId);
-      const validTeam = teams.find((team) => team.id === selectedTeamId);
-
-      if (!validTeam) {
-        throw new Error("Selected team does not belong to this tournament instance.");
-      }
-
-      setCashoutDraftValue(instanceId, place, selectedTeamId);
-
-      const reply = await buildCashoutPlacementReply(instanceId);
-      await interaction.reply({
-        content: `${getPlacementLabel(place)} set to ${validTeam.teamName}.`,
-        ...reply,
-        flags: MessageFlags.Ephemeral,
-      });
-    } catch (error) {
-      await interaction.reply({
-        content:
-          error instanceof Error
-            ? error.message
-            : "Failed to update cashout placement selection.",
-        flags: MessageFlags.Ephemeral,
-      });
-    }
-    return true;
-  }
-
-  if (interaction.customId.startsWith("tournament:select_score_assignment:")) {
-    if (!(await hasAdminInteractionAccess(interaction))) {
-      await interaction.reply({
-        content: "You do not have permission to use this action.",
-        flags: MessageFlags.Ephemeral,
-      });
-      return true;
-    }
-
-    const instanceId = Number(interaction.customId.split(":")[2]);
-    const assignmentId = Number(interaction.values[0]);
-
-    try {
-      const reply = await buildFinalRoundScoreReply(instanceId, assignmentId);
-      await interaction.reply({
-        content: "Select the official Final Round result.",
-        ...reply,
-        flags: MessageFlags.Ephemeral,
-      });
-    } catch (error) {
-      await interaction.reply({
-        content:
-          error instanceof Error
-            ? error.message
-            : "Failed to open Final Round score entry.",
-        flags: MessageFlags.Ephemeral,
-      });
-    }
-
-    return true;
-  }
-
-  if (interaction.customId.startsWith("tournament:score_winner:")) {
-    if (!(await hasAdminInteractionAccess(interaction))) {
-      await interaction.reply({
-        content: "You do not have permission to use this action.",
-        flags: MessageFlags.Ephemeral,
-      });
-      return true;
-    }
-
-    const { instanceId, assignmentId } = parseScoreWinnerSelectCustomId(
-      interaction.customId
-    );
-    const selectedWinnerTeamId = Number(interaction.values[0]);
-    const assignment = await getMatchAssignmentById(assignmentId);
-
-    if (!assignment || assignment.tournamentInstanceId !== instanceId) {
-      await interaction.reply({
-        content: "Final Round assignment not found.",
-        flags: MessageFlags.Ephemeral,
-      });
-      return true;
-    }
-
-    const validWinner =
-      selectedWinnerTeamId === assignment.teamId ||
-      selectedWinnerTeamId === assignment.opponentTeamId;
-
-    if (!validWinner) {
-      await interaction.reply({
-        content: "Selected winner does not belong to this match.",
-        flags: MessageFlags.Ephemeral,
-      });
-      return true;
-    }
-
-    setFinalRoundScoreDraftValue(instanceId, assignmentId, {
-      winnerTeamId: selectedWinnerTeamId,
-    });
-
-    const reply = await buildFinalRoundScoreReply(instanceId, assignmentId);
-    await interaction.reply({
-      content: "Winner selection updated.",
-      ...reply,
-      flags: MessageFlags.Ephemeral,
-    });
-    return true;
-  }
-
-  if (interaction.customId.startsWith("tournament:score_loser_frp:")) {
-    if (!(await hasAdminInteractionAccess(interaction))) {
-      await interaction.reply({
-        content: "You do not have permission to use this action.",
-        flags: MessageFlags.Ephemeral,
-      });
-      return true;
-    }
-
-    const { instanceId, assignmentId } = parseScoreLoserFrpSelectCustomId(
-      interaction.customId
-    );
-    const losingTeamFrp = Number(interaction.values[0]);
-
-    if (losingTeamFrp !== 0 && losingTeamFrp !== 1) {
-      await interaction.reply({
-        content: "Losing team FRP must be 0 or 1.",
-        flags: MessageFlags.Ephemeral,
-      });
-      return true;
-    }
-
-    setFinalRoundScoreDraftValue(instanceId, assignmentId, {
-      losingTeamFrp: losingTeamFrp as 0 | 1,
-    });
-
-    const reply = await buildFinalRoundScoreReply(instanceId, assignmentId);
-    await interaction.reply({
-      content: "Losing team FRP updated.",
-      ...reply,
-      flags: MessageFlags.Ephemeral,
-    });
-    return true;
-  }
-
-  return false;
-}
-
-export async function handleTournamentInstanceModal(
-  interaction: ModalSubmitInteraction
-): Promise<boolean> {
-  if (interaction.customId.startsWith("team:report_modal:")) {
+  if (interaction.customId.startsWith("team:cashout_select:")) {
     if (!interaction.inCachedGuild()) {
       return true;
     }
 
-    const [, , instanceIdRaw, teamIdRaw, assignmentIdRaw] =
-      interaction.customId.split(":");
+    const [, , instanceIdRaw, teamIdRaw] = interaction.customId.split(":");
     const instanceId = Number(instanceIdRaw);
     const teamId = Number(teamIdRaw);
-    const assignmentId = Number(assignmentIdRaw);
-    const team = await getTeamForUserInTournament(
-      interaction.user.id,
-      instanceId,
-      interaction.member.roles
-    );
-
-    if (!team || team.id !== teamId) {
+    const team = await getTeamById(teamId);
+    const roleIds = new Set(Array.from(interaction.member.roles.cache.keys()));
+    if (
+      !team ||
+      team.tournamentInstanceId !== instanceId ||
+      !userHasTeamAccess(interaction.user.id, team, roleIds)
+    ) {
       await interaction.reply({
         content: "You do not belong to this tournament team.",
         flags: MessageFlags.Ephemeral,
@@ -1136,62 +917,248 @@ export async function handleTournamentInstanceModal(
 
     if (!leaderAccess.isLeader) {
       await interaction.reply({
-        content: `Only the team leader can submit an informational report. ${leaderAccess.note ?? ""}`.trim(),
+        content: "Only the team leader can submit results.",
         flags: MessageFlags.Ephemeral,
       });
       return true;
     }
 
-    const score = interaction.fields.getTextInputValue("score").trim().replace("-", "_");
-    const notes = interaction.fields.getTextInputValue("notes").trim();
-    const assignment = await getMatchAssignmentById(assignmentId);
+    const instance = await getTournamentInstanceById(instanceId);
 
-    if (!assignment || assignment.tournamentInstanceId !== instanceId) {
+    if (!instance || instance.currentCycle === null) {
       await interaction.reply({
-        content: "Final Round assignment not found.",
+        content: "This tournament instance is not in an active cycle.",
         flags: MessageFlags.Ephemeral,
       });
       return true;
     }
 
-    const pendingExists = await hasPendingReportSubmissionForAssignment(
-      assignment.id,
-      team.id
-    );
+    const placement = Number(interaction.values[0]);
 
-    if (pendingExists) {
+    try {
+      await createOrUpdateTeamStageSubmission({
+        tournamentInstanceId: instanceId,
+        teamId: team.id,
+        teamName: team.teamName,
+        opponentTeamName: "N/A",
+        cycleNumber: instance.currentCycle,
+        stageName: TournamentStage.CASHOUT,
+        submissionType: "CASHOUT_PLACEMENT",
+        value: placement,
+        submittedByDiscordUserId: interaction.user.id,
+        submittedByDisplayName:
+          interaction.user.tag ?? interaction.user.globalName ?? interaction.user.username,
+      });
+
+      const panel = await buildTeamPanel(
+        interaction.user.id,
+        interaction.guildId,
+        interaction.member.roles
+      );
+
       await interaction.reply({
-        content: "A pending informational report already exists for this team and match.",
+        content: `Cashout placement ${placement} submitted for admin approval.`,
+        ...panel,
+        flags: MessageFlags.Ephemeral,
+      });
+    } catch (error) {
+      await interaction.reply({
+        content:
+          error instanceof Error
+            ? error.message
+            : "Failed to submit cashout placement.",
+        flags: MessageFlags.Ephemeral,
+      });
+    }
+
+    return true;
+  }
+
+  if (interaction.customId.startsWith("team:final_round_select:")) {
+    if (!interaction.inCachedGuild()) {
+      return true;
+    }
+
+    const [, , instanceIdRaw, teamIdRaw] = interaction.customId.split(":");
+    const instanceId = Number(instanceIdRaw);
+    const teamId = Number(teamIdRaw);
+    const team = await getTeamById(teamId);
+    const roleIds = new Set(Array.from(interaction.member.roles.cache.keys()));
+    if (
+      !team ||
+      team.tournamentInstanceId !== instanceId ||
+      !userHasTeamAccess(interaction.user.id, team, roleIds)
+    ) {
+      await interaction.reply({
+        content: "You do not belong to this tournament team.",
         flags: MessageFlags.Ephemeral,
       });
       return true;
     }
 
-    await createReportSubmission({
-      tournamentInstanceId: instanceId,
-      teamId: team.id,
-      score,
-      matchAssignmentId: assignment.id,
-      submittedByDiscordUserId: interaction.user.id,
-      submittedByDisplayName:
-        interaction.user.tag ?? interaction.user.globalName ?? interaction.user.username,
-      teamName: team.teamName,
-      opponentTeamName: assignment.opponentTeamName,
-      cycleNumber: assignment.cycleNumber,
-      stageName: assignment.stageName,
-      notes: notes || "none",
-    });
-
-    const panel = await buildTeamPanel(
-      interaction.user.id,
+    const leaderAccess = await getTeamLeaderAccessDebug(
       interaction.guildId,
-      interaction.member.roles
+      interaction.member.roles,
+      team,
+      interaction.user.id
     );
+
+    if (!leaderAccess.isLeader) {
+      await interaction.reply({
+        content: "Only the team leader can submit results.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return true;
+    }
+
+    const instance = await getTournamentInstanceById(instanceId);
+
+    if (!instance || instance.currentCycle === null) {
+      await interaction.reply({
+        content: "This tournament instance is not in an active cycle.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return true;
+    }
+
+    const assignments = await listMatchAssignmentsForTournamentInstance(
+      instanceId,
+      instance.currentCycle,
+      TournamentStage.FINAL_ROUND
+    );
+    const assignment = assignments.find(
+      (row) => row.teamId === team.id || row.opponentTeamId === team.id
+    );
+
+    if (!assignment) {
+      await interaction.reply({
+        content: "No Final Round assignment exists for your team.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return true;
+    }
+
+    const frp = Number(interaction.values[0]);
+
+    try {
+      await createOrUpdateTeamStageSubmission({
+        tournamentInstanceId: instanceId,
+        teamId: team.id,
+        teamName: team.teamName,
+        opponentTeamName: assignment.teamId === team.id ? assignment.opponentTeamName : assignment.teamName,
+        cycleNumber: instance.currentCycle,
+        stageName: TournamentStage.FINAL_ROUND,
+        submissionType: "FINAL_ROUND_SCORE",
+        value: frp,
+        submittedByDiscordUserId: interaction.user.id,
+        submittedByDisplayName:
+          interaction.user.tag ?? interaction.user.globalName ?? interaction.user.username,
+        matchAssignmentId: assignment.id,
+      });
+
+      const panel = await buildTeamPanel(
+        interaction.user.id,
+        interaction.guildId,
+        interaction.member.roles
+      );
+
+      await interaction.reply({
+        content: `Final Round FRP ${frp} submitted for admin approval.`,
+        ...panel,
+        flags: MessageFlags.Ephemeral,
+      });
+    } catch (error) {
+      await interaction.reply({
+        content:
+          error instanceof Error
+            ? error.message
+            : "Failed to submit Final Round FRP.",
+        flags: MessageFlags.Ephemeral,
+      });
+    }
+
+    return true;
+  }
+
+  if (interaction.customId.startsWith("tournament:select_team_submission:")) {
+    if (!(await hasAdminInteractionAccess(interaction))) {
+      await interaction.reply({
+        content: "You do not have permission to use this action.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return true;
+    }
+
+    const instanceId = Number(interaction.customId.split(":")[2]);
+    const submissionId = Number(interaction.values[0]);
+    const submission = await getReportSubmissionById(submissionId);
+
+    if (!submission) {
+      await interaction.reply({
+        content: "Submission not found.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return true;
+    }
+
+    const type = getTeamStageSubmissionType(submission) ?? "UNKNOWN";
+
+    const embed = new EmbedBuilder()
+      .setTitle(`Submission #${submission.id}`)
+      .setDescription(
+        [
+          `Team: ${submission.teamName}`,
+          `Stage: ${submission.stageName}`,
+          `Type: ${type}`,
+          `Value: ${submission.score}`,
+          `Status: ${formatStageSubmissionStatus(submission.status)}`,
+          `Submitted by: ${submission.submittedByDisplayName}`,
+        ].join("\n")
+      );
+
     await interaction.reply({
-      content: "Informational Final Round report submitted for admin review.",
-      ...panel,
+      embeds: [embed],
+      components: [buildSubmissionActionRow(instanceId, submissionId)],
       flags: MessageFlags.Ephemeral,
     });
+    return true;
+  }
+
+  return false;
+}
+
+export async function handleTournamentInstanceModal(
+  interaction: ModalSubmitInteraction
+): Promise<boolean> {
+  if (interaction.customId.startsWith("tournament:reject_submission_modal:")) {
+    if (!(await hasAdminInteractionAccess(interaction))) {
+      await interaction.reply({
+        content: "You do not have permission to use this action.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return true;
+    }
+
+    const [, , instanceIdRaw, submissionIdRaw] = interaction.customId.split(":");
+    const instanceId = Number(instanceIdRaw);
+    const submissionId = Number(submissionIdRaw);
+    const reason = interaction.fields.getTextInputValue("reject_reason").trim();
+
+    try {
+      await rejectTeamStageSubmission(submissionId, interaction.user.id, reason || "No reason provided.");
+      const review = await buildTeamSubmissionReviewReply(instanceId);
+      await interaction.reply({
+        content: "Team submission rejected.",
+        ...review,
+        flags: MessageFlags.Ephemeral,
+      });
+    } catch (error) {
+      await interaction.reply({
+        content: error instanceof Error ? error.message : "Failed to reject submission.",
+        flags: MessageFlags.Ephemeral,
+      });
+    }
+
     return true;
   }
 
