@@ -792,6 +792,16 @@ function buildSubmissionActionRow(instanceId: number, submissionId: number) {
 export async function handleTournamentInstanceButton(
   interaction: ButtonInteraction
 ): Promise<boolean> {
+  const deferEphemeralResponse = async () => {
+    if (interaction.deferred || interaction.replied) {
+      return;
+    }
+
+    await interaction.deferReply({
+      flags: MessageFlags.Ephemeral,
+    });
+  };
+
   if (interaction.customId === "tournament:change_instance") {
     if (!interaction.inCachedGuild()) {
       return true;
@@ -929,6 +939,7 @@ export async function handleTournamentInstanceButton(
 
     if (action === "checkin") {
       try {
+        await deferEphemeralResponse();
         await handleTournamentLeaderCheckIn(instanceId, team.id, interaction.user.id);
 
         const panel = await buildTeamPanel(
@@ -937,17 +948,19 @@ export async function handleTournamentInstanceButton(
           interaction.member.roles
         );
 
-        await interaction.reply({
+        await interaction.editReply({
           content:
             `${team.teamName} checked in successfully.\n` +
             `The tournament panel will reflect this on refresh.`,
           ...panel,
-          flags: MessageFlags.Ephemeral,
         });
       } catch (error) {
-        await interaction.reply({
+        if (!interaction.deferred && !interaction.replied) {
+          await deferEphemeralResponse();
+        }
+
+        await interaction.editReply({
           content: error instanceof Error ? error.message : "Check-in failed.",
-          flags: MessageFlags.Ephemeral,
         });
       }
       return true;
@@ -1145,6 +1158,7 @@ export async function handleTournamentInstanceButton(
     const cycleNumber = Number(action.split("_")[2]);
 
     try {
+      await deferEphemeralResponse();
       const updated = await startTournamentCycle(
         instanceId,
         cycleNumber,
@@ -1152,15 +1166,17 @@ export async function handleTournamentInstanceButton(
       );
       await assignCashoutMapForCycleIfMissing(instanceId, cycleNumber);
       const panel = await buildTournamentPanel(updated.id);
-      await interaction.reply({
+      await interaction.editReply({
         content: `${updated.name} is ready for cycle ${cycleNumber} cashout.`,
         ...panel,
-        flags: MessageFlags.Ephemeral,
       });
     } catch (error) {
-      await interaction.reply({
+      if (!interaction.deferred && !interaction.replied) {
+        await deferEphemeralResponse();
+      }
+
+      await interaction.editReply({
         content: error instanceof Error ? error.message : "Failed to start cycle.",
-        flags: MessageFlags.Ephemeral,
       });
     }
     return true;
@@ -1188,17 +1204,20 @@ export async function handleTournamentInstanceButton(
 
   if (action === "approve_cashout_stage") {
     try {
+      await deferEphemeralResponse();
       await approveCashoutStage(instanceId, interaction.user.id);
       const panel = await buildTournamentPanel(instanceId);
-      await interaction.reply({
+      await interaction.editReply({
         content: "Cashout stage approved. Official placements and final round pairings are ready.",
         ...panel,
-        flags: MessageFlags.Ephemeral,
       });
     } catch (error) {
-      await interaction.reply({
+      if (!interaction.deferred && !interaction.replied) {
+        await deferEphemeralResponse();
+      }
+
+      await interaction.editReply({
         content: error instanceof Error ? error.message : "Failed to approve cashout stage.",
-        flags: MessageFlags.Ephemeral,
       });
     }
 
@@ -1207,6 +1226,7 @@ export async function handleTournamentInstanceButton(
 
   if (action === "start_final_round") {
     try {
+      await deferEphemeralResponse();
       const instance = await getTournamentInstanceById(instanceId);
       if (!instance || instance.currentCycle === null) {
         throw new Error("This tournament instance is not in an active cycle.");
@@ -1259,15 +1279,17 @@ export async function handleTournamentInstanceButton(
       await assignFinalRoundMapsIfMissing(instanceId, instance.currentCycle);
 
       const panel = await buildTournamentPanel(updated.id);
-      await interaction.reply({
+      await interaction.editReply({
         content: "Final Round started. Matchup maps assigned.",
         ...panel,
-        flags: MessageFlags.Ephemeral,
       });
     } catch (error) {
-      await interaction.reply({
+      if (!interaction.deferred && !interaction.replied) {
+        await deferEphemeralResponse();
+      }
+
+      await interaction.editReply({
         content: error instanceof Error ? error.message : "Failed to start Final Round.",
-        flags: MessageFlags.Ephemeral,
       });
     }
 
@@ -1276,18 +1298,21 @@ export async function handleTournamentInstanceButton(
 
   if (action === "approve_final_round_stage") {
     try {
+      await deferEphemeralResponse();
       await approveFinalRoundStage(instanceId, interaction.user.id);
       const panel = await buildTournamentPanel(instanceId);
-      await interaction.reply({
+      await interaction.editReply({
         content: "Final Round stage approved. Official match results reconciled from team submissions.",
         ...panel,
-        flags: MessageFlags.Ephemeral,
       });
     } catch (error) {
-      await interaction.reply({
+      if (!interaction.deferred && !interaction.replied) {
+        await deferEphemeralResponse();
+      }
+
+      await interaction.editReply({
         content:
           error instanceof Error ? error.message : "Failed to approve final round stage.",
-        flags: MessageFlags.Ephemeral,
       });
     }
 
@@ -1296,17 +1321,20 @@ export async function handleTournamentInstanceButton(
 
   if (action === "finalize_cycle") {
     try {
+      await deferEphemeralResponse();
       const updated = await finalizeTournamentCycle(instanceId, interaction.user.id);
       const panel = await buildTournamentPanel(updated.id);
-      await interaction.reply({
+      await interaction.editReply({
         content: `${updated.name} cycle ${updated.currentCycle} finalized.`,
         ...panel,
-        flags: MessageFlags.Ephemeral,
       });
     } catch (error) {
-      await interaction.reply({
+      if (!interaction.deferred && !interaction.replied) {
+        await deferEphemeralResponse();
+      }
+
+      await interaction.editReply({
         content: error instanceof Error ? error.message : "Failed to finalize cycle.",
-        flags: MessageFlags.Ephemeral,
       });
     }
     return true;
@@ -1366,6 +1394,16 @@ export async function handleTournamentInstanceButton(
 export async function handleTournamentInstanceSelectMenu(
   interaction: StringSelectMenuInteraction
 ): Promise<boolean> {
+  const deferEphemeralResponse = async () => {
+    if (interaction.deferred || interaction.replied) {
+      return;
+    }
+
+    await interaction.deferReply({
+      flags: MessageFlags.Ephemeral,
+    });
+  };
+
   if (interaction.customId === "tournament:select_instance") {
     if (!(await hasAdminInteractionAccess(interaction))) {
       await interaction.reply({
@@ -1480,6 +1518,7 @@ export async function handleTournamentInstanceSelectMenu(
     const placement = Number(interaction.values[0]);
 
     try {
+      await deferEphemeralResponse();
       await createOrUpdateTeamStageSubmission({
         tournamentInstanceId: instanceId,
         teamId: team.id,
@@ -1500,18 +1539,20 @@ export async function handleTournamentInstanceSelectMenu(
         interaction.member.roles
       );
 
-      await interaction.reply({
+      await interaction.editReply({
         content: `Cashout placement ${placement} submitted for admin approval.`,
         ...panel,
-        flags: MessageFlags.Ephemeral,
       });
     } catch (error) {
-      await interaction.reply({
+      if (!interaction.deferred && !interaction.replied) {
+        await deferEphemeralResponse();
+      }
+
+      await interaction.editReply({
         content:
           error instanceof Error
             ? error.message
             : "Failed to submit cashout placement.",
-        flags: MessageFlags.Ephemeral,
       });
     }
 
@@ -1631,6 +1672,7 @@ export async function handleTournamentInstanceSelectMenu(
     const frp = Number(interaction.values[0]);
 
     try {
+      await deferEphemeralResponse();
       await createOrUpdateTeamStageSubmission({
         tournamentInstanceId: instanceId,
         teamId: team.id,
@@ -1652,18 +1694,20 @@ export async function handleTournamentInstanceSelectMenu(
         interaction.member.roles
       );
 
-      await interaction.reply({
+      await interaction.editReply({
         content: `Final Round FRP ${frp} submitted for admin approval.`,
         ...panel,
-        flags: MessageFlags.Ephemeral,
       });
     } catch (error) {
-      await interaction.reply({
+      if (!interaction.deferred && !interaction.replied) {
+        await deferEphemeralResponse();
+      }
+
+      await interaction.editReply({
         content:
           error instanceof Error
             ? error.message
             : "Failed to submit Final Round FRP.",
-        flags: MessageFlags.Ephemeral,
       });
     }
 
@@ -1732,6 +1776,16 @@ export async function handleTournamentInstanceSelectMenu(
 export async function handleTournamentInstanceModal(
   interaction: ModalSubmitInteraction
 ): Promise<boolean> {
+  const deferEphemeralResponse = async () => {
+    if (interaction.deferred || interaction.replied) {
+      return;
+    }
+
+    await interaction.deferReply({
+      flags: MessageFlags.Ephemeral,
+    });
+  };
+
   if (interaction.customId.startsWith("tournament:reject_matchup_modal:")) {
     if (!(await hasAdminInteractionAccess(interaction))) {
       await interaction.reply({
@@ -1815,6 +1869,7 @@ export async function handleTournamentInstanceModal(
     const target = interaction.fields.getTextInputValue("override_target").trim();
 
     try {
+      await deferEphemeralResponse();
       if (action === "reopen_checkin") {
         await reopenTournamentCheckIn(instanceId, interaction.user.id);
       } else if (action === "clear_checkin") {
@@ -1833,21 +1888,30 @@ export async function handleTournamentInstanceModal(
         throw new Error("Unsupported override action.");
       }
 
-      await pushTournamentWebhookUpdate({
-        tournamentInstanceId: instanceId,
-        reason: "admin_override",
-      });
-
       const panel = await buildTournamentPanel(instanceId);
-      await interaction.reply({
+      await interaction.editReply({
         content: "Emergency override applied.",
         ...panel,
-        flags: MessageFlags.Ephemeral,
+      });
+
+      void pushTournamentWebhookUpdate({
+        tournamentInstanceId: instanceId,
+        reason: "admin_override",
+      }).catch((webhookError) => {
+        console.warn("[tournament-webhook-update-failed]", {
+          tournamentInstanceId: instanceId,
+          reason: "admin_override",
+          error:
+            webhookError instanceof Error ? webhookError.message : "Unknown webhook error",
+        });
       });
     } catch (error) {
-      await interaction.reply({
+      if (!interaction.deferred && !interaction.replied) {
+        await deferEphemeralResponse();
+      }
+
+      await interaction.editReply({
         content: error instanceof Error ? error.message : "Emergency override failed.",
-        flags: MessageFlags.Ephemeral,
       });
     }
     return true;
