@@ -307,12 +307,25 @@ export async function listCurrentStageTeamSubmissions(
   stageName: TournamentStage.CASHOUT | TournamentStage.FINAL_ROUND
 ): Promise<StoredReportSubmission[]> {
   await ensureReportSubmissionTable();
+  const activeTeamIds = (
+    await prisma.team.findMany({
+      where: { tournamentInstanceId },
+      select: { id: true },
+    })
+  ).map((team) => team.id);
+
+  if (activeTeamIds.length === 0) {
+    return [];
+  }
 
   const submissions = await prisma.reportSubmission.findMany({
     where: {
       tournamentInstanceId,
       cycleNumber,
       stageName,
+      teamId: {
+        in: activeTeamIds,
+      },
     },
     orderBy: [{ teamName: "asc" }, { submittedAt: "desc" }],
   });
