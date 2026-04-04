@@ -4,7 +4,8 @@
   "version": "0.1.0",
   "packageManager": "pnpm@10.0.0",
   "scripts": {
-    "dev": "ts-node-dev --respawn --transpile-only apps/bot/index.ts"
+    "dev": "ts-node-dev --respawn --transpile-only apps/bot/index.ts",
+    "player:add:ospuze-gooner": "node -r ts-node/register/transpile-only apps/bot/scripts/addOspuzeGoonerToDatabase.ts"
   },
   "description": "This is a starter scaffold for a Discord-first tournament platform for **THE FINALS – Development Division**.",
   "main": "index.js",
