@@ -181,25 +181,34 @@ async function resolveMemberAccessFlags(
   guildId: string,
   roles: GuildMemberRoleManager
 ): Promise<MemberAccessFlags> {
-const configuredRoles = await resolveConfiguredRoleIds(guildId, roles);
+  const configuredRoles = await resolveConfiguredRoleIds(guildId, roles);
 
-    const hasDiscordAdmin = roles.member.permissions.has(
+  const hasDiscordAdmin = roles.member.permissions.has(
     PermissionFlagsBits.Administrator
   );
+  const hasNamedAdminRole = Boolean(
+    findRoleIdByName(roles, ["Admin", "Admins", "Administrator"])
+  );
+  const hasNamedFounderRole = Boolean(findRoleIdByName(roles, ["Founder"]));
+  const hasNamedTeamLeaderRole = Boolean(
+    findRoleIdByName(roles, ["Team Leader", "TeamLeader"])
+  );
+  const hasNamedPlayerRole = Boolean(findRoleIdByName(roles, ["Player", "Players"]));
 
   return {
     isFounder: configuredRoles.founderRoleId
       ? roles.cache.has(configuredRoles.founderRoleId)
-      : false,
+      : hasNamedFounderRole,
     isAdmin:
       hasDiscordAdmin ||
+      hasNamedAdminRole ||
       configuredRoles.adminRoleIds.some((roleId) => roles.cache.has(roleId)),
     isTeamLeader: configuredRoles.teamLeaderRoleId
       ? roles.cache.has(configuredRoles.teamLeaderRoleId)
-      : false,
+      : hasNamedTeamLeaderRole,
     isPlayer: configuredRoles.playerRoleId
       ? roles.cache.has(configuredRoles.playerRoleId)
-      : false,
+      : hasNamedPlayerRole,
     roleIds: new Set(roles.cache.keys()),
   };
 }
