@@ -21,7 +21,6 @@ import {
 import {
   getTeamLeaderAccessDebug,
   hasAdminInteractionAccess,
-  userHasTeamAccess,
 } from "../helpers/permissions";
 import { upsertCashoutPlacement } from "../storage/cashoutPlacements";
 import {
@@ -496,13 +495,13 @@ export async function handleTournamentInstanceButton(
     }
 
     const { action, instanceId, teamId } = parseTeamButton(interaction.customId);
-    const team = await getTeamById(teamId);
-    const roleIds = new Set(Array.from(interaction.member.roles.cache.keys()));
-    if (
-      !team ||
-      team.tournamentInstanceId !== instanceId ||
-      !userHasTeamAccess(interaction.user.id, team, roleIds)
-    ) {
+    const team = await getTeamForUserInTournament(
+      interaction.user.id,
+      instanceId,
+      interaction.member.roles
+    );
+
+    if (!team || team.id !== teamId) {
       await interaction.reply({
         content: "You do not belong to this tournament team.",
         flags: MessageFlags.Ephemeral,
