@@ -862,6 +862,7 @@ export async function getTeamForUser(
         },
       ],
     },
+    orderBy: [{ tournamentInstanceId: "desc" }, { id: "desc" }],
     include: {
       members: {
         orderBy: { sortOrder: "asc" },
@@ -883,6 +884,7 @@ export async function getTeamForUser(
         in: Array.from(roleIds),
       },
     },
+    orderBy: [{ tournamentInstanceId: "desc" }, { id: "desc" }],
     include: {
       members: {
         orderBy: { sortOrder: "asc" },
@@ -898,11 +900,40 @@ export async function getTeamForUserInTournament(
   tournamentInstanceId: number,
   memberRoles?: GuildMemberRoleManager
 ): Promise<StoredTeam | null> {
-  const team = await getTeamForUser(userId, memberRoles);
+  await ensureTeamTables();
 
-  if (!team || team.tournamentInstanceId !== tournamentInstanceId) {
-    return null;
+  const roleIds = memberRoles ? Array.from(memberRoles.cache.keys()) : [];
+  const accessClauses: Array<Record<string, unknown>> = [
+    { leaderDiscordUserId: userId },
+    {
+      members: {
+        some: {
+          discordUserId: userId,
+        },
+      },
+    },
+  ];
+
+  if (roleIds.length > 0) {
+    accessClauses.push({
+      discordRoleId: {
+        in: roleIds,
+      },
+    });
   }
 
-  return team;
+  const team = await prisma.team.findFirst({
+    where: {
+      tournamentInstanceId,
+      OR: accessClauses,
+    },
+    orderBy: { id: "desc" },
+    include: {
+      members: {
+        orderBy: { sortOrder: "asc" },
+      },
+    },
+  });
+
+  return team ? mapTeam(team) : null;
 }
