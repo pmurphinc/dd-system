@@ -5,18 +5,20 @@ import {
   EmbedBuilder,
   GuildMemberRoleManager,
 } from "discord.js";
+import { TournamentStage } from "@prisma/client";
 import { getOfficialResultByMatchAssignmentId } from "../storage/officialMatchResults";
 import { getCurrentFinalRoundAssignmentForTeam } from "../storage/matchAssignments";
+import {
+  getCurrentTeamStageSubmission,
+  getTeamStageSubmissionStatusLabel,
+} from "../storage/reportSubmissions";
 import { getStandingsForTournamentInstance } from "../storage/standings";
 import { getTeamForUser } from "../storage/teams";
 import {
   getTournamentInstanceById,
   syncTournamentInstancesForGuild,
 } from "../storage/tournamentInstances";
-import {
-  canLeaderSubmitInformationalReport,
-  isCheckInOpen,
-} from "./tournamentAccess";
+import { isCheckInOpen } from "./tournamentAccess";
 import { getTeamLeaderAccessDebug } from "./permissions";
 
 function getStageLabel(stage?: string | null): string {
@@ -116,6 +118,12 @@ export async function buildTeamPanel(
         };
 
   const currentStage = instance?.currentStage ?? null;
+  const currentCycle = instance?.currentCycle ?? null;
+  const currentSubmission =
+    instance && currentCycle && (currentStage === TournamentStage.CASHOUT || currentStage === TournamentStage.FINAL_ROUND)
+      ? await getCurrentTeamStageSubmission(instance.id, team.id, currentCycle, currentStage)
+      : null;
+
   const fields: Array<{ name: string; value: string; inline?: boolean }> = [
     {
       name: "Team Name",
@@ -128,26 +136,31 @@ export async function buildTeamPanel(
       inline: true,
     },
     {
-      name: "Stage",
+      name: "Current Stage",
       value: getStageLabel(currentStage),
       inline: true,
     },
     {
-      name: "FRP",
+      name: "Current Team FRP",
       value: `${teamFrp}`,
+      inline: true,
+    },
+    {
+      name: "Submitted Result Status",
+      value: getTeamStageSubmissionStatusLabel(currentSubmission),
       inline: true,
     },
   ];
 
-  if (currentStage === "CASHOUT") {
+  if (currentStage === TournamentStage.CASHOUT) {
     fields.push({
-      name: "Status",
-      value: "Awaiting Cashout results.",
-      inline: false,
+      name: "Submitted Cashout Placement",
+      value: currentSubmission ? `${currentSubmission.score}` : "none",
+      inline: true,
     });
   }
 
-  if (currentStage === "FINAL_ROUND") {
+  if (currentStage === TournamentStage.FINAL_ROUND) {
     fields.push(
       {
         name: "Opponent",
@@ -155,8 +168,13 @@ export async function buildTeamPanel(
         inline: true,
       },
       {
-        name: "Current Score",
+        name: "Official Match Score",
         value: getFinalScoreLabel(officialResult?.score),
+        inline: true,
+      },
+      {
+        name: "Submitted Final Round FRP",
+        value: currentSubmission ? `${currentSubmission.score}` : "none",
         inline: true,
       }
     );
@@ -178,6 +196,13 @@ export async function buildTeamPanel(
   rows.push(refreshRow);
 
   if (leaderAccess.isLeader && instance) {
+    const canEditSubmission =
+      currentSubmission !== null && currentSubmission.status !== "reviewed";
+    const canSubmitCashout =
+      currentStage === TournamentStage.CASHOUT && currentCycle !== null;
+    const canSubmitFinalRound =
+      currentStage === TournamentStage.FINAL_ROUND && currentCycle !== null && !!assignment;
+
     const leaderRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
       new ButtonBuilder()
         .setCustomId(`team:checkin:${instance.id}:${team.id}`)
@@ -187,12 +212,24 @@ export async function buildTeamPanel(
           !isCheckInOpen(instance) || isTeamCheckedIn(team.checkInStatus)
         ),
       new ButtonBuilder()
-        .setCustomId(`team:report:${instance.id}:${team.id}`)
-        .setLabel("Submit Final Report")
+        .setCustomId(`team:submit_cashout:${instance.id}:${team.id}`)
+        .setLabel("Submit Cashout Placement")
         .setStyle(ButtonStyle.Primary)
-        .setDisabled(
-          !canLeaderSubmitInformationalReport(instance) || !assignment
+        .setDisabled(!canSubmitCashout),
+      new ButtonBuilder()
+        .setCustomId(`team:submit_final_round:${instance.id}:${team.id}`)
+        .setLabel("Submit Final Round Score")
+        .setStyle(ButtonStyle.Primary)
+        .setDisabled(!canSubmitFinalRound),
+      new ButtonBuilder()
+        .setCustomId(
+          currentStage === TournamentStage.CASHOUT
+            ? `team:edit_cashout:${instance.id}:${team.id}`
+            : `team:edit_final_round:${instance.id}:${team.id}`
         )
+        .setLabel("Edit Submitted Result")
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(!canEditSubmission)
     );
 
     rows.unshift(leaderRow);
