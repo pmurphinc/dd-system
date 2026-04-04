@@ -5,10 +5,11 @@ import {
   EmbedBuilder,
   StringSelectMenuBuilder,
 } from "discord.js";
+import { TournamentStage } from "@prisma/client";
 import { getCashoutPlacementForCycle } from "../storage/cashoutPlacements";
 import { listMatchAssignmentsForTournamentInstance } from "../storage/matchAssignments";
 import { listOfficialResultsForTournamentInstance } from "../storage/officialMatchResults";
-import { getPendingReportSubmissions } from "../storage/reportSubmissions";
+import { listCurrentStageTeamSubmissions } from "../storage/reportSubmissions";
 import { getStandingsForTournamentInstance } from "../storage/standings";
 import {
   countCheckedInTeamsForInstance,
@@ -89,6 +90,8 @@ export async function buildTournamentPanel(
     };
   }
 
+  const currentCycle = instance.currentCycle ?? undefined;
+
   const [
     teams,
     checkedInCount,
@@ -96,7 +99,7 @@ export async function buildTournamentPanel(
     placements,
     assignments,
     officialResults,
-    pendingReports,
+    stageSubmissions,
   ] = await Promise.all([
     listImportedTeamsForTournamentInstance(instance.id),
     countCheckedInTeamsForInstance(instance.id),
@@ -104,24 +107,28 @@ export async function buildTournamentPanel(
     instance.currentCycle
       ? getCashoutPlacementForCycle(instance.id, instance.currentCycle)
       : Promise.resolve(null),
-    listMatchAssignmentsForTournamentInstance(
-      instance.id,
-      instance.currentCycle ?? undefined
-    ),
-    listOfficialResultsForTournamentInstance(
-      instance.id,
-      instance.currentCycle ?? undefined
-    ),
-    getPendingReportSubmissions(10, instance.id),
+    listMatchAssignmentsForTournamentInstance(instance.id, currentCycle),
+    listOfficialResultsForTournamentInstance(instance.id, currentCycle),
+    instance.currentCycle &&
+    (instance.currentStage === TournamentStage.CASHOUT ||
+      instance.currentStage === TournamentStage.FINAL_ROUND)
+      ? listCurrentStageTeamSubmissions(
+          instance.id,
+          instance.currentCycle,
+          instance.currentStage
+        )
+      : Promise.resolve([]),
   ]);
+
+  const pendingCount = stageSubmissions.filter((row) => row.status === "pending").length;
+  const approvedCount = stageSubmissions.filter((row) => row.status === "reviewed").length;
 
   const getTeamNameById = (teamId?: number | null) => {
     if (!teamId) return "Not set";
     return teams.find((team) => team.id === teamId)?.teamName ?? `Unknown Team (${teamId})`;
   };
 
-  // ✅ CLEAN TEAM DISPLAY (FIXED)
-    const teamLabel =
+  const teamLabel =
     teams.length > 0
       ? teams
           .map((team) => {
@@ -138,6 +145,7 @@ export async function buildTournamentPanel(
           })
           .join("\n")
       : "No teams assigned.";
+
   const assignmentLabel =
     assignments.length > 0
       ? assignments
@@ -162,12 +170,7 @@ export async function buildTournamentPanel(
 
   const standingsLabel =
     standings.length > 0
-      ? standings
-          .map(
-            (standing) =>
-              `${standing.teamName}: ${standing.frp} FRP`
-          )
-          .join("\n")
+      ? standings.map((standing) => `${standing.teamName}: ${standing.frp} FRP`).join("\n")
       : "No standings yet.";
 
   const placementLabel = placements
@@ -178,6 +181,16 @@ export async function buildTournamentPanel(
         `4th - ${getTeamNameById(placements.fourthPlaceTeamId)}`,
       ].join("\n")
     : "Not entered";
+
+  const stageSubmissionsLabel =
+    stageSubmissions.length > 0
+      ? stageSubmissions
+          .map(
+            (submission) =>
+              `${submission.teamName}: ${submission.score} (${submission.status})`
+          )
+          .join("\n")
+      : "No team submissions for current stage.";
 
   const embed = new EmbedBuilder()
     .setTitle(`Tournament Panel: ${getTournamentInstanceLabel(instance)}`)
@@ -195,7 +208,16 @@ export async function buildTournamentPanel(
         value: `${checkedInCount}/${instance.maxTeams}`,
         inline: true,
       },
-      { name: "Pending Results", value: `${pendingReports.length}`, inline: true },
+      {
+        name: "Pending Team Submissions",
+        value: `${pendingCount}`,
+        inline: true,
+      },
+      {
+        name: "Approved Team Submissions",
+        value: `${approvedCount}`,
+        inline: true,
+      },
       {
         name: "Winning Team",
         value: instance.winningTeamId
@@ -205,13 +227,18 @@ export async function buildTournamentPanel(
       },
       { name: "Teams", value: teamLabel.slice(0, 1024), inline: false },
       {
-        name: "Cashout Placements",
+        name: "Approved Cashout Placements",
         value: placementLabel.slice(0, 1024),
         inline: false,
       },
       {
         name: "Final Round Matchups",
         value: assignmentLabel.slice(0, 1024),
+        inline: false,
+      },
+      {
+        name: "Current Stage Team Submissions",
+        value: stageSubmissionsLabel.slice(0, 1024),
         inline: false,
       },
       {
@@ -245,22 +272,22 @@ export async function buildTournamentPanel(
       .setLabel("Start Cycle 1")
       .setStyle(ButtonStyle.Primary),
     new ButtonBuilder()
-      .setCustomId(`tournament:${instance.id}:enter_cashout`)
-      .setLabel("Enter Cashout Placements")
+      .setCustomId(`tournament:${instance.id}:review_team_submissions`)
+      .setLabel("Review Team Submissions")
+      .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId(`tournament:${instance.id}:approve_cashout_stage`)
+      .setLabel("Approve Cashout Stage")
       .setStyle(ButtonStyle.Primary),
     new ButtonBuilder()
-      .setCustomId(`tournament:${instance.id}:enter_score`)
-      .setLabel("Enter Final Round Score")
+      .setCustomId(`tournament:${instance.id}:approve_final_round_stage`)
+      .setLabel("Approve Final Round Stage")
       .setStyle(ButtonStyle.Primary)
   );
 
   const rowOne = new ActionRowBuilder<ButtonBuilder>().addComponents(rowOneButtons);
 
   const rowTwo = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder()
-      .setCustomId(`tournament:${instance.id}:review_pending_results`)
-      .setLabel("Review Pending Results")
-      .setStyle(ButtonStyle.Secondary),
     new ButtonBuilder()
       .setCustomId(`tournament:${instance.id}:finalize_cycle`)
       .setLabel("Finalize Cycle")
