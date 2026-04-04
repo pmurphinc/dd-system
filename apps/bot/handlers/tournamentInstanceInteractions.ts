@@ -65,7 +65,6 @@ import {
 import {
   getTeamById,
   getTeamByTournamentInstanceAndName,
-  getTeamForUserInTournament,
   setTeamCheckInStatus,
 } from "../storage/teams";
 import { pushTournamentWebhookUpdate } from "../services/tournamentWebhook";
@@ -96,6 +95,41 @@ function parseTeamButton(customId: string): {
     instanceId: Number(instanceIdRaw),
     teamId: Number(teamIdRaw),
   };
+}
+
+function evaluateExactTeamMembership(
+  userId: string,
+  team: NonNullable<Awaited<ReturnType<typeof getTeamById>>>,
+  roleIds: Set<string>
+) {
+  const matchesStoredLeaderId =
+    Boolean(team.leaderDiscordUserId) && team.leaderDiscordUserId === userId;
+  const matchesRosterMemberId = team.members.some(
+    (member) => member.discordUserId === userId
+  );
+  const hasTeamRole = team.discordRoleId ? roleIds.has(team.discordRoleId) : false;
+  const isMemberOfExactTeam =
+    matchesStoredLeaderId || matchesRosterMemberId || hasTeamRole;
+
+  return {
+    matchesStoredLeaderId,
+    matchesRosterMemberId,
+    hasTeamRole,
+    isMemberOfExactTeam,
+  };
+}
+
+function logTeamAccessFailure(params: {
+  reason: string;
+  userId: string;
+  instanceId: number;
+  buttonTeamId: number;
+  targetTeamId: number | null;
+  targetTeamName: string | null;
+  isMemberOfExactTeam: boolean;
+  isLeader: boolean;
+}) {
+  console.warn("[team-button-access-denied]", params);
 }
 
 function formatStageSubmissionStatus(status: string): string {
@@ -499,13 +533,42 @@ export async function handleTournamentInstanceButton(
     }
 
     const { action, instanceId, teamId } = parseTeamButton(interaction.customId);
-    const team = await getTeamForUserInTournament(
-      interaction.user.id,
-      instanceId,
-      interaction.member.roles
-    );
+    const team = await getTeamById(teamId);
 
-    if (!team || team.id !== teamId) {
+    if (!team || team.tournamentInstanceId !== instanceId) {
+      logTeamAccessFailure({
+        reason: !team ? "team_not_found" : "team_not_in_instance",
+        userId: interaction.user.id,
+        instanceId,
+        buttonTeamId: teamId,
+        targetTeamId: team?.id ?? null,
+        targetTeamName: team?.teamName ?? null,
+        isMemberOfExactTeam: false,
+        isLeader: false,
+      });
+      await interaction.reply({
+        content: "This team action is no longer valid. Please refresh /team and try again.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return true;
+    }
+
+    const membership = evaluateExactTeamMembership(
+      interaction.user.id,
+      team,
+      new Set(interaction.member.roles.cache.keys())
+    );
+    if (!membership.isMemberOfExactTeam) {
+      logTeamAccessFailure({
+        reason: "not_member_of_exact_team",
+        userId: interaction.user.id,
+        instanceId,
+        buttonTeamId: teamId,
+        targetTeamId: team.id,
+        targetTeamName: team.teamName,
+        isMemberOfExactTeam: membership.isMemberOfExactTeam,
+        isLeader: false,
+      });
       await interaction.reply({
         content: "You do not belong to this tournament team.",
         flags: MessageFlags.Ephemeral,
@@ -521,6 +584,16 @@ export async function handleTournamentInstanceButton(
     );
 
     if (!leaderAccess.isLeader) {
+      logTeamAccessFailure({
+        reason: "not_leader_of_exact_team",
+        userId: interaction.user.id,
+        instanceId,
+        buttonTeamId: teamId,
+        targetTeamId: team.id,
+        targetTeamName: team.teamName,
+        isMemberOfExactTeam: membership.isMemberOfExactTeam,
+        isLeader: leaderAccess.isLeader,
+      });
       await interaction.reply({
         content: `Only the team leader can use this action. ${leaderAccess.note ?? ""}`.trim(),
         flags: MessageFlags.Ephemeral,
@@ -933,13 +1006,41 @@ export async function handleTournamentInstanceSelectMenu(
     const [, , , instanceIdRaw, teamIdRaw] = interaction.customId.split(":");
     const instanceId = Number(instanceIdRaw);
     const teamId = Number(teamIdRaw);
-    const team = await getTeamForUserInTournament(
-      interaction.user.id,
-      instanceId,
-      interaction.member.roles
-    );
+    const team = await getTeamById(teamId);
+    if (!team || team.tournamentInstanceId !== instanceId) {
+      logTeamAccessFailure({
+        reason: !team ? "cashout_select_team_not_found" : "cashout_select_team_not_in_instance",
+        userId: interaction.user.id,
+        instanceId,
+        buttonTeamId: teamId,
+        targetTeamId: team?.id ?? null,
+        targetTeamName: team?.teamName ?? null,
+        isMemberOfExactTeam: false,
+        isLeader: false,
+      });
+      await interaction.reply({
+        content: "This selection is no longer valid. Please refresh /team and try again.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return true;
+    }
 
-    if (!team || team.id !== teamId) {
+    const membership = evaluateExactTeamMembership(
+      interaction.user.id,
+      team,
+      new Set(interaction.member.roles.cache.keys())
+    );
+    if (!membership.isMemberOfExactTeam) {
+      logTeamAccessFailure({
+        reason: "cashout_select_not_member",
+        userId: interaction.user.id,
+        instanceId,
+        buttonTeamId: teamId,
+        targetTeamId: team.id,
+        targetTeamName: team.teamName,
+        isMemberOfExactTeam: membership.isMemberOfExactTeam,
+        isLeader: false,
+      });
       await interaction.reply({
         content: "You do not belong to this tournament team.",
         flags: MessageFlags.Ephemeral,
@@ -955,6 +1056,16 @@ export async function handleTournamentInstanceSelectMenu(
     );
 
     if (!leaderAccess.isLeader) {
+      logTeamAccessFailure({
+        reason: "cashout_select_not_leader",
+        userId: interaction.user.id,
+        instanceId,
+        buttonTeamId: teamId,
+        targetTeamId: team.id,
+        targetTeamName: team.teamName,
+        isMemberOfExactTeam: membership.isMemberOfExactTeam,
+        isLeader: leaderAccess.isLeader,
+      });
       await interaction.reply({
         content: "Only the team leader can submit results.",
         flags: MessageFlags.Ephemeral,
@@ -1021,13 +1132,41 @@ export async function handleTournamentInstanceSelectMenu(
     const [, , , instanceIdRaw, teamIdRaw] = interaction.customId.split(":");
     const instanceId = Number(instanceIdRaw);
     const teamId = Number(teamIdRaw);
-    const team = await getTeamForUserInTournament(
-      interaction.user.id,
-      instanceId,
-      interaction.member.roles
-    );
+    const team = await getTeamById(teamId);
+    if (!team || team.tournamentInstanceId !== instanceId) {
+      logTeamAccessFailure({
+        reason: !team ? "final_round_select_team_not_found" : "final_round_select_team_not_in_instance",
+        userId: interaction.user.id,
+        instanceId,
+        buttonTeamId: teamId,
+        targetTeamId: team?.id ?? null,
+        targetTeamName: team?.teamName ?? null,
+        isMemberOfExactTeam: false,
+        isLeader: false,
+      });
+      await interaction.reply({
+        content: "This selection is no longer valid. Please refresh /team and try again.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return true;
+    }
 
-    if (!team || team.id !== teamId) {
+    const membership = evaluateExactTeamMembership(
+      interaction.user.id,
+      team,
+      new Set(interaction.member.roles.cache.keys())
+    );
+    if (!membership.isMemberOfExactTeam) {
+      logTeamAccessFailure({
+        reason: "final_round_select_not_member",
+        userId: interaction.user.id,
+        instanceId,
+        buttonTeamId: teamId,
+        targetTeamId: team.id,
+        targetTeamName: team.teamName,
+        isMemberOfExactTeam: membership.isMemberOfExactTeam,
+        isLeader: false,
+      });
       await interaction.reply({
         content: "You do not belong to this tournament team.",
         flags: MessageFlags.Ephemeral,
@@ -1043,6 +1182,16 @@ export async function handleTournamentInstanceSelectMenu(
     );
 
     if (!leaderAccess.isLeader) {
+      logTeamAccessFailure({
+        reason: "final_round_select_not_leader",
+        userId: interaction.user.id,
+        instanceId,
+        buttonTeamId: teamId,
+        targetTeamId: team.id,
+        targetTeamName: team.teamName,
+        isMemberOfExactTeam: membership.isMemberOfExactTeam,
+        isLeader: leaderAccess.isLeader,
+      });
       await interaction.reply({
         content: "Only the team leader can submit results.",
         flags: MessageFlags.Ephemeral,
