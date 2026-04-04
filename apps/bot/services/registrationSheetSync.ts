@@ -256,14 +256,8 @@ function normalizeRow(
     (normalized) => normalized === "timestamp" || normalized.includes("submitted")
   );
   // Google Form responses source-of-truth: Column G (0-indexed 6) contains the team map ban.
-  // Keep a header-based fallback for non-standard sheets.
-  const mapBanIndex =
-    row.length > 6 || headers.length > 6
-      ? 6
-      : findFirstIndex(
-          headers,
-          (normalized) => normalized.includes("map") && normalized.includes("ban")
-        );
+  // For the standard registration sync flow, this is hard-pinned and not inferred from headers.
+  const mapBanIndex = 6;
   const leaderDiscordIndex = findFirstIndex(
     headers,
     (normalized) =>
