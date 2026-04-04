@@ -116,6 +116,30 @@ export async function upsertCashoutPlacement(
     ],
   });
 
+  const assignments = await prisma.matchAssignment.findMany({
+    where: {
+      tournamentInstanceId: input.tournamentInstanceId,
+      cycleNumber: input.cycleNumber,
+      stageName: "FINAL_ROUND",
+    },
+    orderBy: { id: "asc" },
+  });
+  const summary = assignments
+    .map(
+      (assignment: {
+        id: number;
+        teamName: string;
+        teamId: number | null;
+        opponentTeamName: string;
+        opponentTeamId: number | null;
+      }) =>
+        `${assignment.id}:${assignment.teamName}(${assignment.teamId}) vs ${assignment.opponentTeamName}(${assignment.opponentTeamId})`
+    )
+    .join(" | ");
+  console.log(
+    `[final-round-pairings] cycle=${input.cycleNumber} assignments=${summary || "none"}`
+  );
+
   await createAuditLog({
     action: "cashout_placements_recorded",
     entityType: "tournament_instance",

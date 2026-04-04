@@ -167,7 +167,15 @@ export async function assignFinalRoundMapsIfMissing(
   );
 
   if (assignments.length === 0) {
-    return;
+    throw new Error(
+      `No Final Round assignments found for cycle ${cycleNumber}. Approve cashout stage before starting Final Round.`
+    );
+  }
+
+  if (assignments.length !== 2) {
+    throw new Error(
+      `Expected exactly 2 Final Round assignments for cycle ${cycleNumber}, found ${assignments.length}.`
+    );
   }
 
   const teams = await listImportedTeamsForTournamentInstance(tournamentInstanceId);
@@ -203,10 +211,14 @@ export async function assignFinalRoundMapsIfMissing(
       );
     }
 
+    const assignedMap = pickRandomMap(availableMaps);
     await prisma.matchAssignment.update({
       where: { id: assignment.id },
-      data: { assignedMap: pickRandomMap(availableMaps) },
+      data: { assignedMap },
     });
+    console.log(
+      `[final-round-map-assign] assignment=${assignment.id} teamA=${assignment.teamName} teamB=${assignment.opponentTeamName} map=${assignedMap}`
+    );
   }
 }
 
