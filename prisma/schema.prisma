@@ -278,6 +278,7 @@ model CashoutPlacement {
   id                   Int                @id @default(autoincrement())
   tournamentInstanceId Int
   cycleNumber          Int
+  isOfficial           Boolean            @default(false)
   firstPlaceTeamId     Int
   secondPlaceTeamId    Int
   thirdPlaceTeamId     Int

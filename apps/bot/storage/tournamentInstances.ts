@@ -413,6 +413,15 @@ export async function startTournamentCycle(
     actorDiscordUserId,
   });
 
+  const cashoutColumns = (await prisma.$queryRawUnsafe(
+    `PRAGMA table_info("CashoutPlacement")`
+  )) as Array<{ name: string }>;
+  if (!cashoutColumns.some((column) => column.name === "isOfficial")) {
+    await prisma.$executeRawUnsafe(
+      `ALTER TABLE "CashoutPlacement" ADD COLUMN "isOfficial" BOOLEAN NOT NULL DEFAULT 0`
+    );
+  }
+
   await prisma.cashoutPlacement.upsert({
     where: {
       tournamentInstanceId_cycleNumber: {
@@ -421,11 +430,13 @@ export async function startTournamentCycle(
       },
     },
     update: {
+      isOfficial: false,
       updatedAt: new Date(),
     },
     create: {
       tournamentInstanceId,
       cycleNumber,
+      isOfficial: false,
       firstPlaceTeamId: teams[0]!.id,
       secondPlaceTeamId: teams[1]!.id,
       thirdPlaceTeamId: teams[2]!.id,

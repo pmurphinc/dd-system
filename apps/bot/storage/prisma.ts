@@ -26,6 +26,7 @@ function assertGeneratedClientSupportsRuntimeSchema(): void {
     ["Team", "mapBan"],
     ["MatchAssignment", "assignedMap"],
     ["CashoutPlacement", "assignedMap"],
+    ["CashoutPlacement", "isOfficial"],
   ] as const;
 
   const missing = requiredFields.filter(([modelName, fieldName]) => {
