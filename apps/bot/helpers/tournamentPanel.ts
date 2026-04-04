@@ -32,6 +32,12 @@ function formatCycleLabel(cycle: number | null | undefined): string {
   return cycle ? `Cycle ${cycle}` : "Cycle -";
 }
 
+function formatSubmissionStatus(status: string): string {
+  if (status === "reviewed") return "approved";
+  if (status === "pending") return "pending";
+  return "rejected";
+}
+
 export async function buildTournamentInstancePicker(guildId: string) {
   const instances = await syncTournamentInstancesForGuild(guildId);
 
@@ -192,14 +198,51 @@ export async function buildTournamentPanel(
     : "Not entered";
 
   const stageSubmissionsLabel =
-    stageSubmissions.length > 0
-      ? stageSubmissions
-          .map(
-            (submission: { teamName: string; score: string; status: string }) =>
-              `${submission.teamName}: ${submission.score} (${submission.status})`
-          )
-          .join("\n")
-      : "No team submissions for current stage.";
+    instance.currentStage === TournamentStage.FINAL_ROUND
+      ? assignments.length > 0
+        ? assignments
+            .map((assignment: {
+              id: number;
+              teamId: number | null;
+              opponentTeamId: number | null;
+              teamName: string;
+              opponentTeamName: string;
+            }) => {
+              const teamSub = stageSubmissions.find(
+                (submission: { teamId: number | null }) =>
+                  submission.teamId === assignment.teamId
+              );
+              const opponentSub = stageSubmissions.find(
+                (submission: { teamId: number | null }) =>
+                  submission.teamId === assignment.opponentTeamId
+              );
+              const teamFrp = teamSub
+                ? `${teamSub.score} FRP (${formatSubmissionStatus(teamSub.status)})`
+                : "none";
+              const opponentFrp = opponentSub
+                ? `${opponentSub.score} FRP (${formatSubmissionStatus(opponentSub.status)})`
+                : "none";
+              const hasOfficial = officialResults.some(
+                (result: { matchAssignmentId: number }) =>
+                  result.matchAssignmentId === assignment.id
+              );
+
+              return [
+                `${assignment.teamName}: ${teamFrp}`,
+                `${assignment.opponentTeamName}: ${opponentFrp}`,
+                `Status: ${hasOfficial ? "already approved / official result exists" : "review in Final Round panel"}`,
+              ].join("\n");
+            })
+            .join("\n\n")
+        : "No Final Round matchups for current cycle."
+      : stageSubmissions.length > 0
+        ? stageSubmissions
+            .map(
+              (submission: { teamName: string; score: string; status: string }) =>
+                `${submission.teamName}: ${submission.score} (${submission.status})`
+            )
+            .join("\n")
+        : "No team submissions for current stage.";
   const missingBanTeams = teams.filter((team: { mapBan: string | null }) => !normalizeMapBan(team.mapBan));
 
   const embed = new EmbedBuilder()

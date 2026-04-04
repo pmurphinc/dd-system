@@ -403,6 +403,274 @@ async function approveFinalRoundStage(instanceId: number, actorDiscordUserId: st
   }
 }
 
+type FinalRoundMatchupReviewState =
+  | "waiting_on_both_teams"
+  | "invalid_pair"
+  | "ready_to_approve"
+  | "already_approved";
+
+interface FinalRoundMatchupReview {
+  assignmentId: number;
+  teamAName: string;
+  teamBName: string;
+  teamASubmission: Awaited<
+    ReturnType<typeof listCurrentStageTeamSubmissions>
+  >[number] | null;
+  teamBSubmission: Awaited<
+    ReturnType<typeof listCurrentStageTeamSubmissions>
+  >[number] | null;
+  officialResultExists: boolean;
+  validationStatus: FinalRoundMatchupReviewState;
+}
+
+function getLatestFinalRoundSubmission(
+  submissions: Awaited<ReturnType<typeof listCurrentStageTeamSubmissions>>,
+  teamId: number
+) {
+  const relevant = submissions
+    .filter((row) => row.teamId === teamId)
+    .sort((a, b) => b.submittedAt.getTime() - a.submittedAt.getTime());
+
+  const latest = relevant[0];
+  if (!latest) {
+    return null;
+  }
+
+  return latest.status === "dismissed" ? null : latest;
+}
+
+function getValidationStatusLabel(state: FinalRoundMatchupReviewState): string {
+  if (state === "waiting_on_both_teams") return "waiting on both teams";
+  if (state === "invalid_pair") return "invalid pair";
+  if (state === "ready_to_approve") return "ready to approve";
+  return "already approved / official result exists";
+}
+
+function formatSubmissionDisplay(
+  submission: Awaited<ReturnType<typeof listCurrentStageTeamSubmissions>>[number] | null
+): string {
+  if (!submission) {
+    return "none";
+  }
+
+  return `${submission.score} FRP (${formatStageSubmissionStatus(submission.status)})`;
+}
+
+function getMatchupValidationStatus(params: {
+  teamSub: Awaited<ReturnType<typeof listCurrentStageTeamSubmissions>>[number] | null;
+  opponentSub: Awaited<ReturnType<typeof listCurrentStageTeamSubmissions>>[number] | null;
+  officialResultExists: boolean;
+}): FinalRoundMatchupReviewState {
+  const { teamSub, opponentSub, officialResultExists } = params;
+  if (officialResultExists) {
+    return "already_approved";
+  }
+
+  if (!teamSub || !opponentSub) {
+    return "waiting_on_both_teams";
+  }
+
+  try {
+    reconcileFinalRoundFrpPair(Number(teamSub.score), Number(opponentSub.score));
+    return "ready_to_approve";
+  } catch {
+    return "invalid_pair";
+  }
+}
+
+async function buildFinalRoundMatchupReviews(
+  instanceId: number,
+  cycleNumber: number
+): Promise<FinalRoundMatchupReview[]> {
+  const assignments = await listMatchAssignmentsForTournamentInstance(
+    instanceId,
+    cycleNumber,
+    TournamentStage.FINAL_ROUND
+  );
+  const submissions = await listCurrentStageTeamSubmissions(
+    instanceId,
+    cycleNumber,
+    TournamentStage.FINAL_ROUND
+  );
+
+  return Promise.all(
+    assignments.map(async (assignment) => {
+      if (assignment.teamId === null || assignment.opponentTeamId === null) {
+        throw new Error("Final Round assignment has missing team linkage.");
+      }
+
+      const teamSub = getLatestFinalRoundSubmission(submissions, assignment.teamId);
+      const opponentSub = getLatestFinalRoundSubmission(
+        submissions,
+        assignment.opponentTeamId
+      );
+      const official = await getOfficialResultByMatchAssignmentId(assignment.id);
+      const officialResultExists = official?.status === "active";
+      const validationStatus = getMatchupValidationStatus({
+        teamSub,
+        opponentSub,
+        officialResultExists,
+      });
+
+      return {
+        assignmentId: assignment.id,
+        teamAName: assignment.teamName,
+        teamBName: assignment.opponentTeamName,
+        teamASubmission: teamSub,
+        teamBSubmission: opponentSub,
+        officialResultExists,
+        validationStatus,
+      };
+    })
+  );
+}
+
+function buildFinalRoundMatchupActionRow(
+  instanceId: number,
+  matchup: FinalRoundMatchupReview
+) {
+  const approvalDisabled = matchup.validationStatus !== "ready_to_approve";
+  const rejectionDisabled = matchup.validationStatus === "already_approved";
+
+  return new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`tournament:approve_matchup:${instanceId}:${matchup.assignmentId}`)
+      .setLabel(`Approve ${matchup.teamAName} vs ${matchup.teamBName}`.slice(0, 80))
+      .setStyle(ButtonStyle.Success)
+      .setDisabled(approvalDisabled),
+    new ButtonBuilder()
+      .setCustomId(`tournament:reject_matchup:${instanceId}:${matchup.assignmentId}`)
+      .setLabel("Reject Matchup")
+      .setStyle(ButtonStyle.Danger)
+      .setDisabled(rejectionDisabled),
+    new ButtonBuilder()
+      .setCustomId(`tournament:${instanceId}:review_team_submissions`)
+      .setLabel("Refresh")
+      .setStyle(ButtonStyle.Secondary)
+  );
+}
+
+async function approveFinalRoundMatchup(
+  instanceId: number,
+  assignmentId: number,
+  actorDiscordUserId: string
+) {
+  const instance = await getTournamentInstanceById(instanceId);
+
+  if (!instance || instance.currentCycle === null) {
+    throw new Error("This tournament instance is not in an active cycle.");
+  }
+
+  if (instance.currentStage !== TournamentStage.FINAL_ROUND) {
+    throw new Error("Matchup approval is only available during FINAL_ROUND.");
+  }
+
+  const assignment = await getMatchAssignmentById(assignmentId);
+  if (
+    !assignment ||
+    assignment.tournamentInstanceId !== instanceId ||
+    assignment.stageName !== TournamentStage.FINAL_ROUND
+  ) {
+    throw new Error("Final Round matchup not found.");
+  }
+
+  if (assignment.teamId === null || assignment.opponentTeamId === null) {
+    throw new Error("Final Round assignment has missing team linkage.");
+  }
+
+  const submissions = await listCurrentStageTeamSubmissions(
+    instanceId,
+    instance.currentCycle,
+    TournamentStage.FINAL_ROUND
+  );
+  const teamSub = getLatestFinalRoundSubmission(submissions, assignment.teamId);
+  const opponentSub = getLatestFinalRoundSubmission(
+    submissions,
+    assignment.opponentTeamId
+  );
+
+  if (!teamSub || !opponentSub) {
+    throw new Error("Both teams must submit Final Round FRP before approving this matchup.");
+  }
+
+  try {
+    reconcileFinalRoundFrpPair(Number(teamSub.score), Number(opponentSub.score));
+  } catch {
+    throw new Error(
+      `Invalid Final Round FRP combination ${teamSub.score}-${opponentSub.score} for ${assignment.teamName} vs ${assignment.opponentTeamName}.`
+    );
+  }
+
+  const existing = await getOfficialResultByMatchAssignmentId(assignment.id);
+  if (existing?.status === "active") {
+    throw new Error("This matchup already has an official result.");
+  }
+
+  await approveTeamStageSubmission(teamSub.id, actorDiscordUserId);
+  await approveTeamStageSubmission(opponentSub.id, actorDiscordUserId);
+
+  await recordOfficialMatchResult(
+    buildOfficialInputFromFrpPair(
+      assignment,
+      Number(teamSub.score),
+      Number(opponentSub.score),
+      actorDiscordUserId
+    )
+  );
+}
+
+async function rejectFinalRoundMatchup(
+  instanceId: number,
+  assignmentId: number,
+  actorDiscordUserId: string,
+  reason: string
+) {
+  const instance = await getTournamentInstanceById(instanceId);
+
+  if (!instance || instance.currentCycle === null) {
+    throw new Error("This tournament instance is not in an active cycle.");
+  }
+
+  if (instance.currentStage !== TournamentStage.FINAL_ROUND) {
+    throw new Error("Matchup rejection is only available during FINAL_ROUND.");
+  }
+
+  const assignment = await getMatchAssignmentById(assignmentId);
+  if (!assignment || assignment.tournamentInstanceId !== instanceId) {
+    throw new Error("Final Round matchup not found.");
+  }
+
+  if (assignment.teamId === null || assignment.opponentTeamId === null) {
+    throw new Error("Final Round assignment has missing team linkage.");
+  }
+
+  const existing = await getOfficialResultByMatchAssignmentId(assignment.id);
+  if (existing?.status === "active") {
+    throw new Error("Cannot reject a matchup with an active official result.");
+  }
+
+  const submissions = await listCurrentStageTeamSubmissions(
+    instanceId,
+    instance.currentCycle,
+    TournamentStage.FINAL_ROUND
+  );
+  const targetSubmissions = [assignment.teamId, assignment.opponentTeamId]
+    .map((teamId) => getLatestFinalRoundSubmission(submissions, teamId))
+    .filter((row): row is NonNullable<typeof row> => Boolean(row));
+
+  if (targetSubmissions.length === 0) {
+    throw new Error("No current submissions were found for this matchup.");
+  }
+
+  for (const submission of targetSubmissions) {
+    await rejectTeamStageSubmission(
+      submission.id,
+      actorDiscordUserId,
+      reason || "Rejected in matchup review."
+    );
+  }
+}
+
 async function buildTeamSubmissionReviewReply(instanceId: number) {
   const instance = await getTournamentInstanceById(instanceId);
 
@@ -415,6 +683,43 @@ async function buildTeamSubmissionReviewReply(instanceId: number) {
     instance.currentStage !== TournamentStage.FINAL_ROUND
   ) {
     throw new Error("Review is available only in CASHOUT or FINAL_ROUND stages.");
+  }
+
+  if (instance.currentStage === TournamentStage.FINAL_ROUND) {
+    const matchups = await buildFinalRoundMatchupReviews(instanceId, instance.currentCycle);
+
+    if (matchups.length === 0) {
+      return {
+        embeds: [
+          new EmbedBuilder()
+            .setTitle("Final Round Matchup Review")
+            .setDescription("No Final Round matchups found for current cycle."),
+        ],
+        components: [],
+      };
+    }
+
+    const description = matchups
+      .map((matchup, index) =>
+        [
+          `**Matchup ${index + 1}: ${matchup.teamAName} vs ${matchup.teamBName}**`,
+          `• ${matchup.teamAName}: ${formatSubmissionDisplay(matchup.teamASubmission)}`,
+          `• ${matchup.teamBName}: ${formatSubmissionDisplay(matchup.teamBSubmission)}`,
+          `• Status: ${getValidationStatusLabel(matchup.validationStatus)}`,
+        ].join("\n")
+      )
+      .join("\n\n");
+
+    return {
+      embeds: [
+        new EmbedBuilder()
+          .setTitle("Final Round Matchup Review")
+          .setDescription(description),
+      ],
+      components: matchups.map((matchup) =>
+        buildFinalRoundMatchupActionRow(instanceId, matchup)
+      ),
+    };
   }
 
   const submissions = await listCurrentStageTeamSubmissions(
@@ -742,6 +1047,50 @@ export async function handleTournamentInstanceButton(
     const modal = new ModalBuilder()
       .setCustomId(`tournament:reject_submission_modal:${instanceId}:${submissionId}`)
       .setTitle("Reject Team Submission");
+
+    const reasonInput = new TextInputBuilder()
+      .setCustomId("reject_reason")
+      .setLabel("Rejection reason")
+      .setPlaceholder("Short reason shown in audit trail")
+      .setStyle(TextInputStyle.Paragraph)
+      .setRequired(true);
+
+    modal.addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(reasonInput));
+    await interaction.showModal(modal);
+    return true;
+  }
+
+  if (interaction.customId.startsWith("tournament:approve_matchup:")) {
+    const [, , instanceIdRaw, assignmentIdRaw] = interaction.customId.split(":");
+    const instanceId = Number(instanceIdRaw);
+    const assignmentId = Number(assignmentIdRaw);
+
+    try {
+      await approveFinalRoundMatchup(instanceId, assignmentId, interaction.user.id);
+      const review = await buildTeamSubmissionReviewReply(instanceId);
+      await interaction.reply({
+        content: "Matchup approved and official result recorded.",
+        ...review,
+        flags: MessageFlags.Ephemeral,
+      });
+    } catch (error) {
+      await interaction.reply({
+        content: error instanceof Error ? error.message : "Failed to approve matchup.",
+        flags: MessageFlags.Ephemeral,
+      });
+    }
+
+    return true;
+  }
+
+  if (interaction.customId.startsWith("tournament:reject_matchup:")) {
+    const [, , instanceIdRaw, assignmentIdRaw] = interaction.customId.split(":");
+    const instanceId = Number(instanceIdRaw);
+    const assignmentId = Number(assignmentIdRaw);
+
+    const modal = new ModalBuilder()
+      .setCustomId(`tournament:reject_matchup_modal:${instanceId}:${assignmentId}`)
+      .setTitle("Reject Final Round Matchup");
 
     const reasonInput = new TextInputBuilder()
       .setCustomId("reject_reason")
@@ -1331,6 +1680,18 @@ export async function handleTournamentInstanceSelectMenu(
     }
 
     const instanceId = Number(interaction.customId.split(":")[2]);
+    const instance = await getTournamentInstanceById(instanceId);
+    if (instance?.currentStage === TournamentStage.FINAL_ROUND) {
+      const review = await buildTeamSubmissionReviewReply(instanceId);
+      await interaction.reply({
+        content:
+          "Final Round uses matchup-based review. Use the matchup controls below.",
+        ...review,
+        flags: MessageFlags.Ephemeral,
+      });
+      return true;
+    }
+
     const submissionId = Number(interaction.values[0]);
     const submission = await getReportSubmissionById(submissionId);
 
@@ -1371,6 +1732,43 @@ export async function handleTournamentInstanceSelectMenu(
 export async function handleTournamentInstanceModal(
   interaction: ModalSubmitInteraction
 ): Promise<boolean> {
+  if (interaction.customId.startsWith("tournament:reject_matchup_modal:")) {
+    if (!(await hasAdminInteractionAccess(interaction))) {
+      await interaction.reply({
+        content: "You do not have permission to use this action.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return true;
+    }
+
+    const [, , instanceIdRaw, assignmentIdRaw] = interaction.customId.split(":");
+    const instanceId = Number(instanceIdRaw);
+    const assignmentId = Number(assignmentIdRaw);
+    const reason = interaction.fields.getTextInputValue("reject_reason").trim();
+
+    try {
+      await rejectFinalRoundMatchup(
+        instanceId,
+        assignmentId,
+        interaction.user.id,
+        reason || "No reason provided."
+      );
+      const review = await buildTeamSubmissionReviewReply(instanceId);
+      await interaction.reply({
+        content: "Matchup submissions rejected.",
+        ...review,
+        flags: MessageFlags.Ephemeral,
+      });
+    } catch (error) {
+      await interaction.reply({
+        content: error instanceof Error ? error.message : "Failed to reject matchup.",
+        flags: MessageFlags.Ephemeral,
+      });
+    }
+
+    return true;
+  }
+
   if (interaction.customId.startsWith("tournament:reject_submission_modal:")) {
     if (!(await hasAdminInteractionAccess(interaction))) {
       await interaction.reply({
