@@ -356,6 +356,28 @@ export async function approveTeamStageSubmission(
     throw new Error("Team stage submission not found.");
   }
 
+  if (parseSubmissionType(existing.notes) === "CASHOUT_PLACEMENT") {
+    const conflicting = await prisma.reportSubmission.findFirst({
+      where: {
+        id: { not: existing.id },
+        tournamentInstanceId: existing.tournamentInstanceId,
+        cycleNumber: existing.cycleNumber,
+        stageName: TournamentStage.CASHOUT,
+        score: existing.score,
+        status: {
+          in: [InformationalReportStatus.pending, InformationalReportStatus.reviewed],
+        },
+      },
+      orderBy: { submittedAt: "desc" },
+    });
+
+    if (conflicting && parseSubmissionType(conflicting.notes) === "CASHOUT_PLACEMENT") {
+      throw new Error(
+        `Cannot approve placement ${existing.score}; it is already reserved by ${conflicting.teamName}.`
+      );
+    }
+  }
+
   return prisma.reportSubmission.update({
     where: { id },
     data: {
@@ -401,6 +423,28 @@ export function getTeamStageSubmissionType(
   submission: StoredReportSubmission
 ): TeamStageSubmissionType | null {
   return parseSubmissionType(submission.notes);
+}
+
+export function reconcileFinalRoundFrpPair(
+  teamFrp: number,
+  opponentFrp: number
+): { winnerFromTeamSide: boolean; score: "2_0" | "2_1" } {
+  const key = `${teamFrp}:${opponentFrp}`;
+  if (!["2:0", "2:1", "1:2", "0:2"].includes(key)) {
+    throw new Error(`Invalid Final Round FRP combination ${teamFrp}-${opponentFrp}.`);
+  }
+
+  if (teamFrp === 2) {
+    return {
+      winnerFromTeamSide: true,
+      score: opponentFrp === 0 ? "2_0" : "2_1",
+    };
+  }
+
+  return {
+    winnerFromTeamSide: false,
+    score: teamFrp === 0 ? "2_0" : "2_1",
+  };
 }
 
 export async function hasPendingReportSubmissionForAssignment(

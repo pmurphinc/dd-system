@@ -114,6 +114,7 @@ model Team {
   importedFromSubmissionId Int?       @unique
   isPlacedInEvent        Boolean      @default(false)
   tournamentInstanceId   Int?
+  mapBan                 String?
   members                TeamMember[]
   tournamentInstance     TournamentInstance? @relation(fields: [tournamentInstanceId], references: [id], onDelete: SetNull)
   standings              Standing[]
@@ -140,6 +141,7 @@ model MatchAssignment {
   cycleNumber      Int
   stageName        String
   bracketLabel     String?
+  assignedMap      String?
   tournamentInstance TournamentInstance? @relation(fields: [tournamentInstanceId], references: [id], onDelete: Cascade)
   officialMatchResult OfficialMatchResult?
 }
@@ -280,6 +282,7 @@ model CashoutPlacement {
   secondPlaceTeamId    Int
   thirdPlaceTeamId     Int
   fourthPlaceTeamId    Int
+  assignedMap          String?
   createdAt            DateTime
   updatedAt            DateTime
   tournamentInstance   TournamentInstance @relation(fields: [tournamentInstanceId], references: [id], onDelete: Cascade)

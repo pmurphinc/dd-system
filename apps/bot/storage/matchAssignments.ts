@@ -11,10 +11,29 @@ export interface StoredMatchAssignment {
   cycleNumber: number;
   stageName: string;
   bracketLabel: string | null;
+  assignedMap: string | null;
 }
 
 function normalizeAssignment(record: StoredMatchAssignment): StoredMatchAssignment {
   return record;
+}
+
+let matchAssignmentTableReady: Promise<void> | undefined;
+
+async function ensureMatchAssignmentColumns(): Promise<void> {
+  matchAssignmentTableReady ??= Promise.resolve().then(async () => {
+    const columns = (await prisma.$queryRawUnsafe(
+      `PRAGMA table_info("MatchAssignment")`
+    )) as Array<{ name: string }>;
+
+    if (!columns.some((column) => column.name === "assignedMap")) {
+      await prisma.$executeRawUnsafe(
+        `ALTER TABLE "MatchAssignment" ADD COLUMN "assignedMap" TEXT`
+      );
+    }
+  });
+
+  await matchAssignmentTableReady;
 }
 
 export async function listMatchAssignmentsForTournamentInstance(
@@ -22,6 +41,7 @@ export async function listMatchAssignmentsForTournamentInstance(
   cycleNumber?: number,
   stageName?: TournamentStage
 ): Promise<StoredMatchAssignment[]> {
+  await ensureMatchAssignmentColumns();
   const assignments = await prisma.matchAssignment.findMany({
     where: {
       tournamentInstanceId,
@@ -37,6 +57,7 @@ export async function listMatchAssignmentsForTournamentInstance(
 export async function getMatchAssignmentById(
   id: number
 ): Promise<StoredMatchAssignment | null> {
+  await ensureMatchAssignmentColumns();
   const assignment = await prisma.matchAssignment.findUnique({
     where: { id },
   });
@@ -49,6 +70,7 @@ export async function getCurrentFinalRoundAssignmentForTeam(
   teamId: number,
   cycleNumber: number | null
 ): Promise<StoredMatchAssignment | null> {
+  await ensureMatchAssignmentColumns();
   if (cycleNumber === null) {
     return null;
   }
@@ -87,5 +109,6 @@ export async function getCurrentFinalRoundAssignmentForTeam(
         cycleNumber: assignment.cycleNumber,
         stageName: assignment.stageName,
         bracketLabel: assignment.bracketLabel,
+        assignedMap: assignment.assignedMap ?? null,
       };
 }

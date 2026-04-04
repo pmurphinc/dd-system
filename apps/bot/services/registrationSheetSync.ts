@@ -14,6 +14,7 @@ import {
 } from "../storage/registrationSync";
 import { ensureDiscordTeamSetup } from "./discordTeamSetup";
 import { getTeamBySubmissionId, syncImportedTeamFromSubmission } from "../storage/teams";
+import { normalizeMapBan } from "../storage/tournamentMaps";
 
 interface SheetSyncSourceConfig {
   sourceKey: string;
@@ -254,10 +255,15 @@ function normalizeRow(
     headers,
     (normalized) => normalized === "timestamp" || normalized.includes("submitted")
   );
-  const mapBanIndex = findFirstIndex(
-    headers,
-    (normalized) => normalized.includes("map") && normalized.includes("ban")
-  );
+  // Google Form responses source-of-truth: Column G (0-indexed 6) contains the team map ban.
+  // Keep a header-based fallback for non-standard sheets.
+  const mapBanIndex =
+    row.length > 6 || headers.length > 6
+      ? 6
+      : findFirstIndex(
+          headers,
+          (normalized) => normalized.includes("map") && normalized.includes("ban")
+        );
   const leaderDiscordIndex = findFirstIndex(
     headers,
     (normalized) =>
@@ -338,6 +344,9 @@ function normalizeRow(
     }));
 
   const rowKey = `${source.spreadsheetId}:${worksheetTitle}:${rowNumber}`;
+  const rawMapBan = readCell(row, mapBanIndex);
+  const normalizedMapBan = normalizeMapBan(rawMapBan);
+
   return {
     rowKey,
     rowNumber,
@@ -351,9 +360,11 @@ function normalizeRow(
       normalizeOptionalValue(readCell(row, discordCommunityIndex))
     ),
     originalSubmittedAt: parseSubmittedAt(readCell(row, timestampIndex)),
-    mapBan: readCell(row, mapBanIndex) || null,
+    mapBan: normalizedMapBan,
     submittedNotes: buildSubmittedNotes([
-      readCell(row, mapBanIndex) ? `Map Ban: ${readCell(row, mapBanIndex)}` : null,
+      rawMapBan ? `Map Ban (Column G): ${rawMapBan}` : null,
+      rawMapBan && !normalizedMapBan ? "Map Ban Validation: INVALID_VALUE" : null,
+      !rawMapBan ? "Map Ban Validation: MISSING_VALUE" : null,
       `Synced from ${source.sourceLabel} row ${rowNumber}.`,
     ]),
     players,
@@ -361,7 +372,15 @@ function normalizeRow(
 }
 
 function getRowValidationIssues(row: NormalizedSheetRow): RowValidationIssue[] {
-  return [];
+  const issues: RowValidationIssue[] = [];
+  if (!row.mapBan) {
+    issues.push({
+      severity: "warning",
+      reason: "Missing or invalid map ban from Google Form column G.",
+    });
+  }
+
+  return issues;
 }
 
 function toBase64Url(input: string): string {
