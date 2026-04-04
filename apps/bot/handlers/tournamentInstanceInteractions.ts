@@ -872,7 +872,7 @@ export async function handleTournamentInstanceSelectMenu(
       return true;
     }
 
-    const [, , instanceIdRaw, teamIdRaw] = interaction.customId.split(":");
+    const [, , , instanceIdRaw, teamIdRaw] = interaction.customId.split(":");
     const instanceId = Number(instanceIdRaw);
     const teamId = Number(teamIdRaw);
     const team = await getTeamForUserInTournament(
@@ -960,7 +960,7 @@ export async function handleTournamentInstanceSelectMenu(
       return true;
     }
 
-    const [, , instanceIdRaw, teamIdRaw] = interaction.customId.split(":");
+    const [, , , instanceIdRaw, teamIdRaw] = interaction.customId.split(":");
     const instanceId = Number(instanceIdRaw);
     const teamId = Number(teamIdRaw);
     const team = await getTeamForUserInTournament(
