@@ -211,6 +211,9 @@ function buildTeamPayload(submission: StoredRegistrationSubmission) {
 
 async function loadTeamById(id: number): Promise<StoredTeam | null> {
   await ensureTeamTables();
+  if (!Number.isInteger(id) || id <= 0) {
+    return null;
+  }
 
   const team = await prisma.team.findUnique({
     where: { id },
