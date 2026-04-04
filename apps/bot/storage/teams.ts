@@ -469,6 +469,7 @@ export async function syncImportedTeamFromSubmission(
     JSON.stringify(existing.playerNames) !== payload.playerNames ||
     existing.substituteName !== payload.substituteName ||
     existing.leaderDiscordUserId !== payload.leaderDiscordUserId ||
+    existing.mapBan !== payload.mapBan ||
     existing.importedFromSubmissionId !== submission.id;
 
   const existingMembers = existing
