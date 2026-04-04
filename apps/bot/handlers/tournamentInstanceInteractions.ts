@@ -885,6 +885,22 @@ export async function handleTournamentInstanceButton(
           "Start Final Round requires approved cashout stage placements. Run Approve Cashout Stage first."
         );
       }
+      const finalRoundAssignments = await listMatchAssignmentsForTournamentInstance(
+        instanceId,
+        instance.currentCycle,
+        TournamentStage.FINAL_ROUND
+      );
+      if (finalRoundAssignments.length !== 2) {
+        await upsertCashoutPlacement({
+          tournamentInstanceId: instanceId,
+          cycleNumber: instance.currentCycle,
+          firstPlaceTeamId: officialPlacements.firstPlaceTeamId,
+          secondPlaceTeamId: officialPlacements.secondPlaceTeamId,
+          thirdPlaceTeamId: officialPlacements.thirdPlaceTeamId,
+          fourthPlaceTeamId: officialPlacements.fourthPlaceTeamId,
+          actorDiscordUserId: interaction.user.id,
+        });
+      }
 
       const updated = await setTournamentInstanceFinalRoundReady(
         instanceId,

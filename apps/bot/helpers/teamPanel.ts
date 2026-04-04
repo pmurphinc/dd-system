@@ -133,6 +133,12 @@ export async function buildTeamPanel(
       ? await getAssignedMapForTeamCurrentStage(instance.id, team.id, currentCycle, currentStage)
       : null;
 
+  if (currentStage === TournamentStage.FINAL_ROUND) {
+    console.log(
+      `[team-panel-final-round] team=${team.teamName} assignmentId=${assignment?.id ?? "none"} opponent=${assignment?.opponentTeamName ?? "none"} map=${assignedMap ?? "none"}`
+    );
+  }
+
   const fields: Array<{ name: string; value: string; inline?: boolean }> = [
     {
       name: "Team Name",
@@ -170,8 +176,6 @@ export async function buildTeamPanel(
       inline: true,
     },
   ];
-
-  console.log(`[team-panel-map] team=${team.teamName} mapBan=${team.mapBan ?? "<null>"}`);
 
   if (currentStage === TournamentStage.CASHOUT) {
     fields.push({
