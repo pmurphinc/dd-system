@@ -42,6 +42,7 @@ interface NormalizedSheetRow {
   discordCommunity: string | null;
   discordCommunityKey: string | null;
   originalSubmittedAt: Date | null;
+  rawMapBan: string;
   mapBan: string | null;
   submittedNotes: string;
   players: RegistrationPlayerInput[];
@@ -354,6 +355,7 @@ function normalizeRow(
       normalizeOptionalValue(readCell(row, discordCommunityIndex))
     ),
     originalSubmittedAt: parseSubmittedAt(readCell(row, timestampIndex)),
+    rawMapBan,
     mapBan: normalizedMapBan,
     submittedNotes: buildSubmittedNotes([
       rawMapBan ? `Map Ban (Column G): ${rawMapBan}` : null,
@@ -676,9 +678,19 @@ async function syncSource(
           imported += 1;
         }
 
+        const teamBeforeSync = await getTeamBySubmissionId(result.submission.id);
         const teamSync = await syncImportedTeamFromSubmission(
           result.submission,
           "google-sheets-sync"
+        );
+        const teamAfterSync = teamSync.team ?? (await getTeamBySubmissionId(result.submission.id));
+        const teamMapBanUpdated =
+          (teamBeforeSync?.mapBan ?? null) !== (teamAfterSync?.mapBan ?? null);
+
+        console.log(
+          `[registration-sync][map-ban] team="${normalized.teamName}" raw_col_g="${normalized.rawMapBan || "<blank>"}" normalized="${normalized.mapBan ?? "<invalid_or_missing>"}" submission_stored=${Boolean(
+            result.submission.mapBan
+          )} team_updated=${teamMapBanUpdated}`
         );
 
         if (result.updated || teamSync.updated) {

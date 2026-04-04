@@ -5,7 +5,7 @@ import { listMatchAssignmentsForTournamentInstance } from "./matchAssignments";
 
 export const OFFICIAL_MAP_POOL = [
   "FANGWAI CITY",
-  "NOZOMI/CITADEL",
+  "NOZOMI CITADEL",
   "LAS VEGAS STADIUM",
   "BERNAL",
   "FORTUNE STADIUM",
@@ -17,14 +17,29 @@ export const OFFICIAL_MAP_POOL = [
 ] as const;
 
 function normalizeMapKey(value: string): string {
-  return value.trim().toUpperCase().replace(/\s+/g, " ");
+  return value
+    .trim()
+    .toUpperCase()
+    .replace(/\s*\/\s*/g, "/")
+    .replace(/\s+/g, " ");
 }
+
+const MAP_BAN_ALIASES: Record<string, (typeof OFFICIAL_MAP_POOL)[number]> = {
+  "NOZOMI/CITADEL": "NOZOMI CITADEL",
+};
 
 export function normalizeMapBan(rawValue: string | null | undefined): string | null {
   if (!rawValue?.trim()) return null;
   const normalizedInput = normalizeMapKey(rawValue);
-  const match = OFFICIAL_MAP_POOL.find((map) => normalizeMapKey(map) === normalizedInput);
-  return match ?? null;
+  const aliasMatch = MAP_BAN_ALIASES[normalizedInput];
+  if (aliasMatch) {
+    return aliasMatch;
+  }
+
+  const canonicalMatch = OFFICIAL_MAP_POOL.find(
+    (map) => normalizeMapKey(map) === normalizedInput
+  );
+  return canonicalMatch ?? null;
 }
 
 function pickRandomMap(availableMaps: string[]): string {
