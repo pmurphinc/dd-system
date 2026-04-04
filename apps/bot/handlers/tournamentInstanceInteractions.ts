@@ -65,6 +65,7 @@ import {
 import {
   getTeamById,
   getTeamByTournamentInstanceAndName,
+  listImportedTeamsForTournamentInstance,
   setTeamCheckInStatus,
 } from "../storage/teams";
 import { pushTournamentWebhookUpdate } from "../services/tournamentWebhook";
@@ -141,6 +142,37 @@ function formatStageSubmissionStatus(status: string): string {
   if (status === "pending") return "pending";
   if (status === "reviewed") return "approved";
   return "rejected";
+}
+
+function truncateButtonLabel(label: string, maxLength = 80): string {
+  if (label.length <= maxLength) {
+    return label;
+  }
+
+  return `${label.slice(0, maxLength - 1)}…`;
+}
+
+async function buildForceCheckInReply(instanceId: number) {
+  const teams = await listImportedTeamsForTournamentInstance(instanceId);
+  const uncheckedTeams = teams.filter((team) => team.checkInStatus !== "Checked In");
+
+  if (uncheckedTeams.length === 0) {
+    return null;
+  }
+
+  const rows = uncheckedTeams.map((team) =>
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`tournament:force_checkin_team:${instanceId}:${team.id}`)
+        .setLabel(truncateButtonLabel(team.teamName))
+        .setStyle(ButtonStyle.Primary)
+    )
+  );
+
+  return {
+    content: "Select a team to force check in.",
+    components: rows,
+  };
 }
 
 async function buildCashoutTeamSelectReply(
@@ -1029,6 +1061,40 @@ export async function handleTournamentInstanceButton(
     return true;
   }
 
+  if (interaction.customId.startsWith("tournament:force_checkin_team:")) {
+    const [, , instanceIdRaw, teamIdRaw] = interaction.customId.split(":");
+    const instanceId = parseFiniteNumber(instanceIdRaw);
+    const teamId = parseFiniteNumber(teamIdRaw);
+
+    if (instanceId === null || teamId === null) {
+      await interaction.reply({
+        content: "Invalid force check-in payload.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return true;
+    }
+
+    try {
+      await deferEphemeralResponse();
+      await handleTournamentLeaderCheckIn(instanceId, teamId, interaction.user.id);
+      const panel = await buildTournamentPanel(instanceId);
+      await interaction.editReply({
+        content: "Team force checked in successfully.",
+        ...panel,
+      });
+    } catch (error) {
+      if (!interaction.deferred && !interaction.replied) {
+        await deferEphemeralResponse();
+      }
+
+      await interaction.editReply({
+        content: error instanceof Error ? error.message : "Force check-in failed.",
+      });
+    }
+
+    return true;
+  }
+
   if (interaction.customId.startsWith("tournament:approve_submission:")) {
     const [, , instanceIdRaw, submissionIdRaw] = interaction.customId.split(":");
     const instanceId = Number(instanceIdRaw);
@@ -1195,6 +1261,35 @@ export async function handleTournamentInstanceButton(
           error instanceof Error
             ? error.message
             : "Failed to open team submissions review.",
+        flags: MessageFlags.Ephemeral,
+      });
+    }
+
+    return true;
+  }
+
+  if (action === "force_checkin") {
+    try {
+      const forceCheckInReply = await buildForceCheckInReply(instanceId);
+
+      if (!forceCheckInReply) {
+        await interaction.reply({
+          content: "All teams are already checked in.",
+          flags: MessageFlags.Ephemeral,
+        });
+        return true;
+      }
+
+      await interaction.reply({
+        ...forceCheckInReply,
+        flags: MessageFlags.Ephemeral,
+      });
+    } catch (error) {
+      await interaction.reply({
+        content:
+          error instanceof Error
+            ? error.message
+            : "Failed to load force check-in options.",
         flags: MessageFlags.Ephemeral,
       });
     }

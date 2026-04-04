@@ -338,6 +338,10 @@ export async function buildTournamentPanel(
       .setLabel("Start Cycle 1")
       .setStyle(ButtonStyle.Primary),
     new ButtonBuilder()
+      .setCustomId(`tournament:${instance.id}:force_checkin`)
+      .setLabel("Force Check-In")
+      .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
       .setCustomId(`tournament:${instance.id}:review_team_submissions`)
       .setLabel("Review Team Submissions")
       .setStyle(ButtonStyle.Secondary)
