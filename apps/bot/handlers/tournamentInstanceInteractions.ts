@@ -771,19 +771,16 @@ async function buildTeamSubmissionReviewReply(instanceId: number) {
     };
   }
 
-  const menu = new StringSelectMenuBuilder()
-    .setCustomId(`tournament:select_team_submission:${instanceId}`)
-    .setPlaceholder("Select a team submission to review")
-    .addOptions(
-      submissions.map((submission) => ({
-        label: `${submission.teamName} (${submission.score})`.slice(0, 100),
-        description: `${submission.stageName} | ${formatStageSubmissionStatus(submission.status)}`.slice(
-          0,
-          100
-        ),
-        value: `${submission.id}`,
-      }))
-    );
+  const submissionRows = submissions.map((submission) =>
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`tournament:open_submission:${instanceId}:${submission.id}`)
+        .setLabel(
+          truncateButtonLabel(`${submission.teamName} (${submission.score})`)
+        )
+        .setStyle(ButtonStyle.Secondary)
+    )
+  );
 
   return {
     embeds: [
@@ -800,7 +797,7 @@ async function buildTeamSubmissionReviewReply(instanceId: number) {
             .join("\n")
         ),
     ],
-    components: [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(menu)],
+    components: submissionRows,
   };
 }
 
@@ -819,6 +816,29 @@ function buildSubmissionActionRow(instanceId: number, submissionId: number) {
       .setLabel("Back")
       .setStyle(ButtonStyle.Secondary)
   );
+}
+
+function buildSubmissionReviewEmbed(
+  submission: Awaited<ReturnType<typeof getReportSubmissionById>>
+) {
+  if (!submission) {
+    return null;
+  }
+
+  const type = getTeamStageSubmissionType(submission) ?? "UNKNOWN";
+
+  return new EmbedBuilder()
+    .setTitle(`Submission #${submission.id}`)
+    .setDescription(
+      [
+        `Team: ${submission.teamName}`,
+        `Stage: ${submission.stageName}`,
+        `Type: ${type}`,
+        `Value: ${submission.score}`,
+        `Status: ${formatStageSubmissionStatus(submission.status)}`,
+        `Submitted by: ${submission.submittedByDisplayName}`,
+      ].join("\n")
+    );
 }
 
 export async function handleTournamentInstanceButton(
@@ -1115,6 +1135,29 @@ export async function handleTournamentInstanceButton(
       });
     }
 
+    return true;
+  }
+
+  if (interaction.customId.startsWith("tournament:open_submission:")) {
+    const [, , instanceIdRaw, submissionIdRaw] = interaction.customId.split(":");
+    const instanceId = Number(instanceIdRaw);
+    const submissionId = Number(submissionIdRaw);
+    const submission = await getReportSubmissionById(submissionId);
+
+    if (!submission) {
+      await interaction.reply({
+        content: "Submission not found.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return true;
+    }
+
+    const embed = buildSubmissionReviewEmbed(submission);
+    await interaction.reply({
+      embeds: embed ? [embed] : [],
+      components: [buildSubmissionActionRow(instanceId, submissionId)],
+      flags: MessageFlags.Ephemeral,
+    });
     return true;
   }
 
@@ -1842,23 +1885,10 @@ export async function handleTournamentInstanceSelectMenu(
       return true;
     }
 
-    const type = getTeamStageSubmissionType(submission) ?? "UNKNOWN";
-
-    const embed = new EmbedBuilder()
-      .setTitle(`Submission #${submission.id}`)
-      .setDescription(
-        [
-          `Team: ${submission.teamName}`,
-          `Stage: ${submission.stageName}`,
-          `Type: ${type}`,
-          `Value: ${submission.score}`,
-          `Status: ${formatStageSubmissionStatus(submission.status)}`,
-          `Submitted by: ${submission.submittedByDisplayName}`,
-        ].join("\n")
-      );
+    const embed = buildSubmissionReviewEmbed(submission);
 
     await interaction.reply({
-      embeds: [embed],
+      embeds: embed ? [embed] : [],
       components: [buildSubmissionActionRow(instanceId, submissionId)],
       flags: MessageFlags.Ephemeral,
     });
