@@ -56,6 +56,7 @@ import {
 import {
   getTeamById,
   getTeamByTournamentInstanceAndName,
+  getTeamForUserInTournament,
   setTeamCheckInStatus,
 } from "../storage/teams";
 import { pushTournamentWebhookUpdate } from "../services/tournamentWebhook";
@@ -92,26 +93,6 @@ function formatStageSubmissionStatus(status: string): string {
   if (status === "pending") return "pending";
   if (status === "reviewed") return "approved";
   return "rejected";
-}
-
-function userHasTeamAccess(
-  userId: string,
-  team: Awaited<ReturnType<typeof getTeamById>>,
-  roleIds: Set<string>
-): boolean {
-  if (!team) {
-    return false;
-  }
-
-  if (team.leaderDiscordUserId === userId) {
-    return true;
-  }
-
-  if (team.members.some((member) => member.discordUserId === userId)) {
-    return true;
-  }
-
-  return team.discordRoleId ? roleIds.has(team.discordRoleId) : false;
 }
 
 async function buildCashoutTeamSelectReply(
@@ -891,16 +872,16 @@ export async function handleTournamentInstanceSelectMenu(
       return true;
     }
 
-    const [, , instanceIdRaw, teamIdRaw] = interaction.customId.split(":");
+    const [, , , instanceIdRaw, teamIdRaw] = interaction.customId.split(":");
     const instanceId = Number(instanceIdRaw);
     const teamId = Number(teamIdRaw);
-    const team = await getTeamById(teamId);
-    const roleIds = new Set(Array.from(interaction.member.roles.cache.keys()));
-    if (
-      !team ||
-      team.tournamentInstanceId !== instanceId ||
-      !userHasTeamAccess(interaction.user.id, team, roleIds)
-    ) {
+    const team = await getTeamForUserInTournament(
+      interaction.user.id,
+      instanceId,
+      interaction.member.roles
+    );
+
+    if (!team || team.id !== teamId) {
       await interaction.reply({
         content: "You do not belong to this tournament team.",
         flags: MessageFlags.Ephemeral,
@@ -979,16 +960,16 @@ export async function handleTournamentInstanceSelectMenu(
       return true;
     }
 
-    const [, , instanceIdRaw, teamIdRaw] = interaction.customId.split(":");
+    const [, , , instanceIdRaw, teamIdRaw] = interaction.customId.split(":");
     const instanceId = Number(instanceIdRaw);
     const teamId = Number(teamIdRaw);
-    const team = await getTeamById(teamId);
-    const roleIds = new Set(Array.from(interaction.member.roles.cache.keys()));
-    if (
-      !team ||
-      team.tournamentInstanceId !== instanceId ||
-      !userHasTeamAccess(interaction.user.id, team, roleIds)
-    ) {
+    const team = await getTeamForUserInTournament(
+      interaction.user.id,
+      instanceId,
+      interaction.member.roles
+    );
+
+    if (!team || team.id !== teamId) {
       await interaction.reply({
         content: "You do not belong to this tournament team.",
         flags: MessageFlags.Ephemeral,
