@@ -381,7 +381,9 @@ export async function getTeamLeaderAccessDebug(
   const matchesLeaderMemberId = team.members.some(
     (member) => member.isLeader && member.discordUserId === userId
   );
-  const isRoleBasedLeader = memberAccess.isTeamLeader && hasTeamRole;
+  const hasBaseTeamParticipationRole = memberAccess.isPlayer || hasTeamRole;
+  const isRoleBasedLeader =
+    memberAccess.isTeamLeader && hasBaseTeamParticipationRole;
   const isLeader =
     matchesStoredLeaderId || matchesLeaderMemberId || isRoleBasedLeader;
 
@@ -404,7 +406,7 @@ export async function getTeamLeaderAccessDebug(
     });
   } else if (!isLeader) {
     note =
-      "Leader access requires a stored leader match or both the team role and base Team Leader role.";
+      "Leader access requires a stored leader match, a roster leader match, or Team Leader plus Player/team role access.";
   }
 
   return {
