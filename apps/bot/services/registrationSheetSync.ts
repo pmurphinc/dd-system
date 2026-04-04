@@ -688,9 +688,7 @@ async function syncSource(
           (teamBeforeSync?.mapBan ?? null) !== (teamAfterSync?.mapBan ?? null);
 
         console.log(
-          `[registration-sync][map-ban] team="${normalized.teamName}" raw_col_g="${normalized.rawMapBan || "<blank>"}" normalized="${normalized.mapBan ?? "<invalid_or_missing>"}" submission_stored=${Boolean(
-            result.submission.mapBan
-          )} team_updated=${teamMapBanUpdated}`
+          `[map-ban-sync] team=${normalized.teamName} raw=${normalized.rawMapBan || "<blank>"} normalized=${normalized.mapBan ?? "<invalid_or_missing>"} submission=${result.submission.mapBan ?? "<null>"} teamBefore=${teamBeforeSync?.mapBan ?? "<null>"} teamAfter=${teamAfterSync?.mapBan ?? "<null>"}`
         );
 
         if (result.updated || teamSync.updated) {

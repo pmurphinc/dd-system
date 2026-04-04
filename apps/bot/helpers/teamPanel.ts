@@ -171,6 +171,8 @@ export async function buildTeamPanel(
     },
   ];
 
+  console.log(`[team-panel-map] team=${team.teamName} mapBan=${team.mapBan ?? "<null>"}`);
+
   if (currentStage === TournamentStage.CASHOUT) {
     fields.push({
       name: "Submitted Cashout Placement",
