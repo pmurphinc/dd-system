@@ -22,6 +22,11 @@ export async function upsertCashoutPlacement(
       `ALTER TABLE "CashoutPlacement" ADD COLUMN "assignedMap" TEXT`
     );
   }
+  if (!columns.some((column) => column.name === "isOfficial")) {
+    await prisma.$executeRawUnsafe(
+      `ALTER TABLE "CashoutPlacement" ADD COLUMN "isOfficial" BOOLEAN NOT NULL DEFAULT 0`
+    );
+  }
 
   const teamIds = [
     input.firstPlaceTeamId,
@@ -56,6 +61,7 @@ export async function upsertCashoutPlacement(
       },
     },
     update: {
+      isOfficial: true,
       firstPlaceTeamId: input.firstPlaceTeamId,
       secondPlaceTeamId: input.secondPlaceTeamId,
       thirdPlaceTeamId: input.thirdPlaceTeamId,
@@ -65,6 +71,7 @@ export async function upsertCashoutPlacement(
     create: {
       tournamentInstanceId: input.tournamentInstanceId,
       cycleNumber: input.cycleNumber,
+      isOfficial: true,
       firstPlaceTeamId: input.firstPlaceTeamId,
       secondPlaceTeamId: input.secondPlaceTeamId,
       thirdPlaceTeamId: input.thirdPlaceTeamId,
@@ -154,12 +161,20 @@ export async function getCashoutPlacementForCycle(
   tournamentInstanceId: number,
   cycleNumber: number
 ) {
-  return prisma.cashoutPlacement.findUnique({
+  const columns = (await prisma.$queryRawUnsafe(
+    `PRAGMA table_info("CashoutPlacement")`
+  )) as Array<{ name: string }>;
+  if (!columns.some((column) => column.name === "isOfficial")) {
+    await prisma.$executeRawUnsafe(
+      `ALTER TABLE "CashoutPlacement" ADD COLUMN "isOfficial" BOOLEAN NOT NULL DEFAULT 0`
+    );
+  }
+
+  return prisma.cashoutPlacement.findFirst({
     where: {
-      tournamentInstanceId_cycleNumber: {
-        tournamentInstanceId,
-        cycleNumber,
-      },
+      tournamentInstanceId,
+      cycleNumber,
+      isOfficial: true,
     },
   });
 }

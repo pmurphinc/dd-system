@@ -70,6 +70,11 @@ async function ensureMapColumns(): Promise<void> {
         `ALTER TABLE "CashoutPlacement" ADD COLUMN "assignedMap" TEXT`
       );
     }
+    if (!cashoutColumns.some((column) => column.name === "isOfficial")) {
+      await prisma.$executeRawUnsafe(
+        `ALTER TABLE "CashoutPlacement" ADD COLUMN "isOfficial" BOOLEAN NOT NULL DEFAULT 0`
+      );
+    }
 
     const teamColumns = (await prisma.$queryRawUnsafe(
       `PRAGMA table_info("Team")`
