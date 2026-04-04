@@ -137,6 +137,9 @@ export async function buildTournamentPanel(
     teams.length > 0
       ? teams
           .map((team: { checkInStatus: string; mapBan: string | null; teamName: string }) => {
+            console.log(
+              `[tournament-panel-map] team=${team.teamName} mapBan=${team.mapBan ?? "<null>"}`
+            );
             const normalizedStatus = String(team.checkInStatus)
               .trim()
               .toUpperCase()
