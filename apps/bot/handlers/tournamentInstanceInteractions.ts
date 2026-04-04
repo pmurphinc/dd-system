@@ -97,6 +97,11 @@ function parseTeamButton(customId: string): {
   };
 }
 
+function parseFiniteNumber(raw: string | undefined): number | null {
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 function evaluateExactTeamMembership(
   userId: string,
   team: NonNullable<Awaited<ReturnType<typeof getTeamById>>>,
@@ -500,7 +505,15 @@ export async function handleTournamentInstanceButton(
       return true;
     }
 
-    const teamId = Number(interaction.customId.split(":")[2]);
+    const teamId = parseFiniteNumber(interaction.customId.split(":")[2]);
+    if (teamId === null) {
+      await interaction.reply({
+        content: "Invalid team refresh payload. Please refresh /team and try again.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return true;
+    }
+
     const team = await getTeamById(teamId);
 
     if (!team) {
@@ -533,6 +546,14 @@ export async function handleTournamentInstanceButton(
     }
 
     const { action, instanceId, teamId } = parseTeamButton(interaction.customId);
+    if (!Number.isFinite(instanceId) || !Number.isFinite(teamId)) {
+      await interaction.reply({
+        content: "Invalid team action payload. Please refresh /team and try again.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return true;
+    }
+
     const team = await getTeamById(teamId);
 
     if (!team || team.tournamentInstanceId !== instanceId) {
@@ -1003,9 +1024,17 @@ export async function handleTournamentInstanceSelectMenu(
       return true;
     }
 
-    const [, , , instanceIdRaw, teamIdRaw] = interaction.customId.split(":");
-    const instanceId = Number(instanceIdRaw);
-    const teamId = Number(teamIdRaw);
+    const [, , instanceIdRaw, teamIdRaw] = interaction.customId.split(":");
+    const instanceId = parseFiniteNumber(instanceIdRaw);
+    const teamId = parseFiniteNumber(teamIdRaw);
+    if (instanceId === null || teamId === null) {
+      await interaction.reply({
+        content: "Invalid cashout selection payload. Please refresh /team and try again.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return true;
+    }
+
     const team = await getTeamById(teamId);
     if (!team || team.tournamentInstanceId !== instanceId) {
       logTeamAccessFailure({
@@ -1129,9 +1158,17 @@ export async function handleTournamentInstanceSelectMenu(
       return true;
     }
 
-    const [, , , instanceIdRaw, teamIdRaw] = interaction.customId.split(":");
-    const instanceId = Number(instanceIdRaw);
-    const teamId = Number(teamIdRaw);
+    const [, , instanceIdRaw, teamIdRaw] = interaction.customId.split(":");
+    const instanceId = parseFiniteNumber(instanceIdRaw);
+    const teamId = parseFiniteNumber(teamIdRaw);
+    if (instanceId === null || teamId === null) {
+      await interaction.reply({
+        content: "Invalid final round selection payload. Please refresh /team and try again.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return true;
+    }
+
     const team = await getTeamById(teamId);
     if (!team || team.tournamentInstanceId !== instanceId) {
       logTeamAccessFailure({
