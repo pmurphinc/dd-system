@@ -659,27 +659,32 @@ export async function resetTournamentInstance(
   }
 
   await prisma.$transaction(async (tx: any) => {
-    // 1. Clear standings
+    // 1. Clear stage report submissions (cashout + final round, all statuses)
+    await tx.reportSubmission.deleteMany({
+      where: { tournamentInstanceId },
+    });
+
+    // 2. Clear standings
     await tx.standing.deleteMany({
       where: { tournamentInstanceId },
     });
 
-    // 2. Clear official results
+    // 3. Clear official results
     await tx.officialMatchResult.deleteMany({
       where: { tournamentInstanceId },
     });
 
-    // 3. Clear match assignments
+    // 4. Clear match assignments (includes assigned maps for final round)
     await tx.matchAssignment.deleteMany({
       where: { tournamentInstanceId },
     });
 
-    // 4. Clear cashout placements (if you have this table)
+    // 5. Clear cashout placements (includes assigned map for cashout)
     await tx.cashoutPlacement?.deleteMany?.({
       where: { tournamentInstanceId },
     }).catch(() => {});
 
-    // 5. Unassign all teams + reset check-in
+    // 6. Unassign all teams + reset check-in
     await tx.team.updateMany({
       where: { tournamentInstanceId },
       data: {
@@ -689,7 +694,7 @@ export async function resetTournamentInstance(
       },
     });
 
-    // 6. Reset instance state
+    // 7. Reset instance state
     await tx.tournamentInstance.update({
       where: { id: tournamentInstanceId },
       data: {
