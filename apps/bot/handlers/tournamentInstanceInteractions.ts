@@ -299,15 +299,18 @@ async function buildFinalRoundTeamSelectReply(
   };
 }
 
-async function approveCashoutStage(instanceId: number, actorDiscordUserId: string) {
+async function maybeAutoFinalizeCashoutStage(
+  instanceId: number,
+  actorDiscordUserId: string
+): Promise<{ finalized: boolean }> {
   const instance = await getTournamentInstanceById(instanceId);
 
   if (!instance || instance.currentCycle === null) {
-    throw new Error("This tournament instance is not in an active cycle.");
+    return { finalized: false };
   }
 
   if (instance.currentStage !== TournamentStage.CASHOUT) {
-    throw new Error("Approve Cashout Stage is only available during CASHOUT.");
+    return { finalized: false };
   }
 
   const submissions = await listCurrentStageTeamSubmissions(
@@ -318,19 +321,24 @@ async function approveCashoutStage(instanceId: number, actorDiscordUserId: strin
 
   const approved = submissions.filter((row) => row.status === "reviewed");
   if (approved.length !== 4) {
-    throw new Error("Four approved cashout placements are required before stage approval.");
+    return { finalized: false };
   }
 
   const values = approved.map((row) => Number(row.score));
   const uniqueValues = new Set(values);
   if (uniqueValues.size !== 4 || values.some((value) => ![1, 2, 3, 4].includes(value))) {
-    throw new Error("Approved cashout placements must be unique values from 1st to 4th.");
+    return { finalized: false };
+  }
+
+  const sortedPlacements = [...values].sort((a, b) => a - b);
+  if (sortedPlacements.join(",") !== "1,2,3,4") {
+    return { finalized: false };
   }
 
   const byPlacement = new Map<number, number>();
   for (const submission of approved) {
     if (submission.teamId === null) {
-      throw new Error("Found approved placement missing team linkage.");
+      return { finalized: false };
     }
 
     byPlacement.set(Number(submission.score), submission.teamId);
@@ -345,6 +353,8 @@ async function approveCashoutStage(instanceId: number, actorDiscordUserId: strin
     fourthPlaceTeamId: byPlacement.get(4)!,
     actorDiscordUserId,
   });
+
+  return { finalized: true };
 }
 
 function buildOfficialInputFromFrpPair(
@@ -877,6 +887,16 @@ async function approveAllCashoutSubmissions(instanceId: number, actorDiscordUser
   for (const submission of submissions) {
     await approveTeamStageSubmission(submission.id, actorDiscordUserId);
   }
+
+  const { finalized } = await maybeAutoFinalizeCashoutStage(
+    instanceId,
+    actorDiscordUserId
+  );
+  if (!finalized) {
+    throw new Error(
+      "Cashout submissions were approved but automatic Cashout finalization did not complete."
+    );
+  }
 }
 
 function buildSubmissionActionRow(instanceId: number, submissionId: number) {
@@ -1199,10 +1219,21 @@ export async function handleTournamentInstanceButton(
     const submissionId = Number(submissionIdRaw);
 
     try {
-      await approveTeamStageSubmission(submissionId, interaction.user.id);
+      const approvedSubmission = await approveTeamStageSubmission(
+        submissionId,
+        interaction.user.id
+      );
+      const isCashoutApproval =
+        getTeamStageSubmissionType(approvedSubmission) === "CASHOUT_PLACEMENT";
+      const autoFinalizeResult = isCashoutApproval
+        ? await maybeAutoFinalizeCashoutStage(instanceId, interaction.user.id)
+        : { finalized: false };
       const review = await buildTeamSubmissionReviewReply(instanceId);
       await interaction.reply({
-        content: "Team submission approved.",
+        content:
+          isCashoutApproval && autoFinalizeResult.finalized
+            ? "Team submission approved. Cashout stage auto-finalized and Final Round pairings are ready."
+            : "Team submission approved.",
         ...review,
         flags: MessageFlags.Ephemeral,
       });
@@ -1224,7 +1255,8 @@ export async function handleTournamentInstanceButton(
       await approveAllCashoutSubmissions(instanceId, interaction.user.id);
       const review = await buildTeamSubmissionReviewReply(instanceId);
       await interaction.reply({
-        content: "All cashout submissions approved.",
+        content:
+          "All cashout submissions approved. Cashout stage auto-finalized and Final Round pairings are ready.",
         ...review,
         flags: MessageFlags.Ephemeral,
       });
@@ -1443,28 +1475,6 @@ export async function handleTournamentInstanceButton(
     return true;
   }
 
-  if (action === "approve_cashout_stage") {
-    try {
-      await deferEphemeralResponse();
-      await approveCashoutStage(instanceId, interaction.user.id);
-      const panel = await buildTournamentPanel(instanceId);
-      await interaction.editReply({
-        content: "Cashout stage approved. Official placements and final round pairings are ready.",
-        ...panel,
-      });
-    } catch (error) {
-      if (!interaction.deferred && !interaction.replied) {
-        await deferEphemeralResponse();
-      }
-
-      await interaction.editReply({
-        content: error instanceof Error ? error.message : "Failed to approve cashout stage.",
-      });
-    }
-
-    return true;
-  }
-
   if (action === "start_final_round") {
     try {
       await deferEphemeralResponse();
@@ -1490,10 +1500,16 @@ export async function handleTournamentInstanceButton(
         instanceId,
         instance.currentCycle
       );
-      if (!officialPlacements) {
-        throw new Error(
-          "Start Final Round requires approved cashout stage placements. Run Approve Cashout Stage first."
+      let resolvedPlacements = officialPlacements;
+      if (!resolvedPlacements) {
+        await maybeAutoFinalizeCashoutStage(instanceId, interaction.user.id);
+        resolvedPlacements = await getCashoutPlacementForCycle(
+          instanceId,
+          instance.currentCycle
         );
+      }
+      if (!resolvedPlacements) {
+        throw new Error("Start Final Round requires valid approved cashout placements.");
       }
       const finalRoundAssignments = await listMatchAssignmentsForTournamentInstance(
         instanceId,
@@ -1504,10 +1520,10 @@ export async function handleTournamentInstanceButton(
         await upsertCashoutPlacement({
           tournamentInstanceId: instanceId,
           cycleNumber: instance.currentCycle,
-          firstPlaceTeamId: officialPlacements.firstPlaceTeamId,
-          secondPlaceTeamId: officialPlacements.secondPlaceTeamId,
-          thirdPlaceTeamId: officialPlacements.thirdPlaceTeamId,
-          fourthPlaceTeamId: officialPlacements.fourthPlaceTeamId,
+          firstPlaceTeamId: resolvedPlacements.firstPlaceTeamId,
+          secondPlaceTeamId: resolvedPlacements.secondPlaceTeamId,
+          thirdPlaceTeamId: resolvedPlacements.thirdPlaceTeamId,
+          fourthPlaceTeamId: resolvedPlacements.fourthPlaceTeamId,
           actorDiscordUserId: interaction.user.id,
         });
       }
