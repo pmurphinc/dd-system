@@ -374,10 +374,6 @@ export async function buildTournamentPanel(
 
   const rowThree = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
-      .setCustomId(`tournament:${instance.id}:approve_cashout_stage`)
-      .setLabel("Approve Cashout Stage")
-      .setStyle(ButtonStyle.Primary),
-    new ButtonBuilder()
       .setCustomId(`tournament:${instance.id}:approve_final_round_stage`)
       .setLabel("Approve Final Round Stage")
       .setStyle(ButtonStyle.Primary),
