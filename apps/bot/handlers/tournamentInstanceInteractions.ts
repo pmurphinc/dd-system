@@ -782,6 +782,19 @@ async function buildTeamSubmissionReviewReply(instanceId: number) {
     )
   );
 
+  const components = [...submissionRows];
+
+  if (instance.currentStage === TournamentStage.CASHOUT) {
+    components.push(
+      new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`tournament:approve_all_cashout_submissions:${instanceId}`)
+          .setLabel("Approve All Submissions")
+          .setStyle(ButtonStyle.Success)
+      )
+    );
+  }
+
   return {
     embeds: [
       new EmbedBuilder()
@@ -797,8 +810,73 @@ async function buildTeamSubmissionReviewReply(instanceId: number) {
             .join("\n")
         ),
     ],
-    components: submissionRows,
+    components,
   };
+}
+
+function validateCashoutBulkApproval(
+  submissions: Awaited<ReturnType<typeof listCurrentStageTeamSubmissions>>
+) {
+  if (submissions.length !== 4) {
+    throw new Error(
+      `Approve All Submissions requires 4 cashout submissions, found ${submissions.length}.`
+    );
+  }
+
+  const nonApprovable = submissions.filter((submission) => submission.status !== "pending");
+  if (nonApprovable.length > 0) {
+    const details = nonApprovable
+      .map((submission) => `${submission.teamName} (${formatStageSubmissionStatus(submission.status)})`)
+      .join(", ");
+    throw new Error(
+      `Approve All Submissions only works when all 4 submissions are pending. Non-approvable submissions: ${details}.`
+    );
+  }
+
+  const placements = submissions.map((submission) => Number(submission.score));
+  const invalidPlacements = placements.filter((placement) => ![1, 2, 3, 4].includes(placement));
+  if (invalidPlacements.length > 0) {
+    throw new Error(
+      `Approve All Submissions requires placement values 1, 2, 3, and 4. Invalid values: ${invalidPlacements.join(", ")}.`
+    );
+  }
+
+  if (new Set(placements).size !== 4) {
+    throw new Error(
+      `Approve All Submissions requires unique placements 1, 2, 3, and 4. Received: ${placements.join(", ")}.`
+    );
+  }
+
+  const sortedPlacements = [...placements].sort((a, b) => a - b);
+  if (sortedPlacements.join(",") !== "1,2,3,4") {
+    throw new Error(
+      `Approve All Submissions requires the exact placement set 1, 2, 3, and 4. Received: ${sortedPlacements.join(", ")}.`
+    );
+  }
+}
+
+async function approveAllCashoutSubmissions(instanceId: number, actorDiscordUserId: string) {
+  const instance = await getTournamentInstanceById(instanceId);
+
+  if (!instance || instance.currentCycle === null) {
+    throw new Error("This tournament instance is not in an active cycle.");
+  }
+
+  if (instance.currentStage !== TournamentStage.CASHOUT) {
+    throw new Error("Approve All Submissions is only available during CASHOUT.");
+  }
+
+  const submissions = await listCurrentStageTeamSubmissions(
+    instanceId,
+    instance.currentCycle,
+    TournamentStage.CASHOUT
+  );
+
+  validateCashoutBulkApproval(submissions);
+
+  for (const submission of submissions) {
+    await approveTeamStageSubmission(submission.id, actorDiscordUserId);
+  }
 }
 
 function buildSubmissionActionRow(instanceId: number, submissionId: number) {
@@ -1131,6 +1209,31 @@ export async function handleTournamentInstanceButton(
     } catch (error) {
       await interaction.reply({
         content: error instanceof Error ? error.message : "Failed to approve submission.",
+        flags: MessageFlags.Ephemeral,
+      });
+    }
+
+    return true;
+  }
+
+  if (interaction.customId.startsWith("tournament:approve_all_cashout_submissions:")) {
+    const [, , instanceIdRaw] = interaction.customId.split(":");
+    const instanceId = Number(instanceIdRaw);
+
+    try {
+      await approveAllCashoutSubmissions(instanceId, interaction.user.id);
+      const review = await buildTeamSubmissionReviewReply(instanceId);
+      await interaction.reply({
+        content: "All cashout submissions approved.",
+        ...review,
+        flags: MessageFlags.Ephemeral,
+      });
+    } catch (error) {
+      await interaction.reply({
+        content:
+          error instanceof Error
+            ? error.message
+            : "Failed to approve all cashout submissions.",
         flags: MessageFlags.Ephemeral,
       });
     }
