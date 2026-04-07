@@ -92,7 +92,7 @@ export async function assignCashoutMapForCycleIfMissing(
   cycleNumber: number
 ): Promise<string> {
   await ensureMapColumns();
-  const placement = await prisma.cashoutPlacement.findUnique({
+  let placement = await prisma.cashoutPlacement.findUnique({
     where: {
       tournamentInstanceId_cycleNumber: {
         tournamentInstanceId,
@@ -102,7 +102,47 @@ export async function assignCashoutMapForCycleIfMissing(
   });
 
   if (!placement) {
-    throw new Error("Cashout placement row is missing for this cycle; cannot store assigned map.");
+    const teams = await listImportedTeamsForTournamentInstance(tournamentInstanceId);
+    if (teams.length !== 4) {
+      throw new Error("Cashout map assignment requires exactly 4 teams in the tournament instance.");
+    }
+
+    const now = new Date();
+    await prisma.cashoutPlacement.upsert({
+      where: {
+        tournamentInstanceId_cycleNumber: {
+          tournamentInstanceId,
+          cycleNumber,
+        },
+      },
+      update: {
+        updatedAt: now,
+      },
+      create: {
+        tournamentInstanceId,
+        cycleNumber,
+        isOfficial: false,
+        firstPlaceTeamId: teams[0]!.id,
+        secondPlaceTeamId: teams[1]!.id,
+        thirdPlaceTeamId: teams[2]!.id,
+        fourthPlaceTeamId: teams[3]!.id,
+        createdAt: now,
+        updatedAt: now,
+      },
+    });
+
+    placement = await prisma.cashoutPlacement.findUnique({
+      where: {
+        tournamentInstanceId_cycleNumber: {
+          tournamentInstanceId,
+          cycleNumber,
+        },
+      },
+    });
+
+    if (!placement) {
+      throw new Error("Failed to initialize cashout placement row for this cycle.");
+    }
   }
 
   if (placement.assignedMap?.trim()) {
