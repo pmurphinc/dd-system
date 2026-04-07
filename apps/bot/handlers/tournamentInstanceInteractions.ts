@@ -15,6 +15,11 @@ import {
 import { TournamentStage } from "@prisma/client";
 import { buildTeamPanel } from "../helpers/teamPanel";
 import {
+  getAvailableTeamPanelActions,
+  getAvailableTournamentPanelActions,
+} from "../helpers/tournamentActionVisibility";
+import { isCheckInOpen } from "../helpers/tournamentAccess";
+import {
   buildTournamentInstancePicker,
   buildTournamentPanel,
 } from "../helpers/tournamentPanel";
@@ -32,6 +37,7 @@ import {
 } from "../storage/matchAssignments";
 import {
   getOfficialResultByMatchAssignmentId,
+  listOfficialResultsForTournamentInstance,
   recordOfficialMatchResult,
   voidOfficialMatchResult,
 } from "../storage/officialMatchResults";
@@ -52,6 +58,7 @@ import {
 } from "../storage/tournamentMaps";
 import {
   closeTournamentCheckIn,
+  countCheckedInTeamsForInstance,
   finalizeTournamentCycle,
   finishTournamentInstance,
   getTournamentInstanceById,
@@ -76,6 +83,24 @@ type TeamButtonAction =
   | "edit_cashout"
   | "submit_final_round"
   | "edit_final_round";
+
+type TournamentPanelAction =
+  | "open_checkin"
+  | "close_checkin"
+  | "start_cycle_1"
+  | "force_checkin"
+  | "review_team_submissions"
+  | "finalize_cycle"
+  | "start_final_round"
+  | "start_cycle_2"
+  | "start_cycle_3"
+  | "finish"
+  | "approve_final_round_stage"
+  | "refresh";
+
+const STALE_ACTION_MESSAGE =
+  "This action is no longer available for the current tournament stage. Refresh the panel and try again.";
+
 
 function parseTournamentButton(customId: string) {
   const [, instanceIdRaw, action] = customId.split(":");
@@ -102,6 +127,36 @@ function parseFiniteNumber(raw: string | undefined): number | null {
   const parsed = Number(raw);
   return Number.isFinite(parsed) ? parsed : null;
 }
+
+function getTournamentActionAvailabilityKey(
+  action: TournamentPanelAction
+): keyof ReturnType<typeof getAvailableTournamentPanelActions> | null {
+  if (action === "open_checkin") return "canOpenCheckIn";
+  if (action === "close_checkin") return "canCloseCheckIn";
+  if (action === "force_checkin") return "canForceCheckIn";
+  if (action === "start_cycle_1") return "canStartCycle1";
+  if (action === "start_cycle_2") return "canStartCycle2";
+  if (action === "start_cycle_3") return "canStartCycle3";
+  if (action === "review_team_submissions") return "canReviewTeamSubmissions";
+  if (action === "start_final_round") return "canStartFinalRound";
+  if (action === "approve_final_round_stage") return "canApproveFinalRoundStage";
+  if (action === "finalize_cycle") return "canFinalizeCycle";
+  if (action === "finish") return "canFinishTournament";
+  if (action === "refresh") return "canRefresh";
+  return null;
+}
+
+function getTeamActionAvailabilityKey(
+  action: TeamButtonAction
+): keyof ReturnType<typeof getAvailableTeamPanelActions> | null {
+  if (action === "checkin") return "canCheckIn";
+  if (action === "submit_cashout") return "canSubmitCashout";
+  if (action === "edit_cashout") return "canEditCashout";
+  if (action === "submit_final_round") return "canSubmitFinalRound";
+  if (action === "edit_final_round") return "canEditFinalRound";
+  return null;
+}
+
 
 function evaluateExactTeamMembership(
   userId: string,
@@ -1087,6 +1142,57 @@ export async function handleTournamentInstanceButton(
       return true;
     }
 
+    const instance = await getTournamentInstanceById(instanceId);
+    const currentStage = instance?.currentStage ?? null;
+    const currentCycle = instance?.currentCycle ?? null;
+    const currentSubmission =
+      instance &&
+      currentCycle &&
+      (currentStage === TournamentStage.CASHOUT ||
+        currentStage === TournamentStage.FINAL_ROUND)
+        ? await getCurrentTeamStageSubmission(instance.id, team.id, currentCycle, currentStage)
+        : null;
+    const currentSubmissionType = currentSubmission
+      ? getTeamStageSubmissionType(currentSubmission)
+      : null;
+    const finalRoundAssignments =
+      instance && currentCycle && currentStage === TournamentStage.FINAL_ROUND
+        ? await listMatchAssignmentsForTournamentInstance(
+            instance.id,
+            currentCycle,
+            TournamentStage.FINAL_ROUND
+          )
+        : [];
+    const hasCurrentStageAssignment = finalRoundAssignments.some(
+      (row) => row.teamId === team.id || row.opponentTeamId === team.id
+    );
+    const availableTeamActions = getAvailableTeamPanelActions({
+      isLeader: leaderAccess.isLeader,
+      hasInstance: Boolean(instance),
+      teamBelongsToInstance: team.tournamentInstanceId === instanceId,
+      isCheckInOpen: isCheckInOpen(instance),
+      isTeamCheckedIn: team.checkInStatus === "Checked In",
+      currentStage,
+      currentCycle,
+      hasCurrentStageAssignment,
+      hasCurrentStageSubmission: currentSubmission !== null,
+      isCurrentStageSubmissionEditable:
+        currentSubmission !== null && currentSubmission.status !== "reviewed",
+      currentSubmissionType:
+        currentSubmissionType === "CASHOUT_PLACEMENT" ||
+        currentSubmissionType === "FINAL_ROUND_SCORE"
+          ? currentSubmissionType
+          : null,
+    });
+    const teamAvailabilityKey = getTeamActionAvailabilityKey(action);
+    if (teamAvailabilityKey && !availableTeamActions[teamAvailabilityKey]) {
+      await interaction.reply({
+        content: STALE_ACTION_MESSAGE,
+        flags: MessageFlags.Ephemeral,
+      });
+      return true;
+    }
+
     if (action === "checkin") {
       try {
         await deferEphemeralResponse();
@@ -1187,6 +1293,35 @@ export async function handleTournamentInstanceButton(
     if (instanceId === null || teamId === null) {
       await interaction.reply({
         content: "Invalid force check-in payload.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return true;
+    }
+
+    const instance = await getTournamentInstanceById(instanceId);
+    if (!instance) {
+      await interaction.reply({
+        content: "Tournament instance not found.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return true;
+    }
+
+    const checkedInCount = await countCheckedInTeamsForInstance(instanceId);
+    const availableActions = getAvailableTournamentPanelActions({
+      status: instance.status,
+      currentStage: instance.currentStage,
+      currentCycle: instance.currentCycle,
+      isCheckInOpen: isCheckInOpen(instance),
+      checkedInCount,
+      maxTeams: instance.maxTeams,
+      hasUncheckedTeams: checkedInCount < instance.maxTeams,
+      hasCashoutAdvancementData: false,
+      finalRoundOfficialResultsCount: 0,
+    });
+    if (!availableActions.canForceCheckIn) {
+      await interaction.reply({
+        content: STALE_ACTION_MESSAGE,
         flags: MessageFlags.Ephemeral,
       });
       return true;
@@ -1362,6 +1497,68 @@ export async function handleTournamentInstanceButton(
   }
 
   const { instanceId, action } = parseTournamentButton(interaction.customId);
+
+  const tournamentAction = action as TournamentPanelAction;
+  const tournamentAvailabilityKey = getTournamentActionAvailabilityKey(tournamentAction);
+  if (tournamentAvailabilityKey) {
+    const instance = await getTournamentInstanceById(instanceId);
+
+    if (!instance) {
+      await interaction.reply({
+        content: "Tournament instance not found.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return true;
+    }
+
+    const checkedInCount = await countCheckedInTeamsForInstance(instanceId);
+    const stageSubmissions =
+      instance.currentCycle !== null &&
+      (instance.currentStage === TournamentStage.CASHOUT ||
+        instance.currentStage === TournamentStage.FINAL_ROUND)
+        ? await listCurrentStageTeamSubmissions(
+            instanceId,
+            instance.currentCycle,
+            instance.currentStage
+          )
+        : [];
+    const placements =
+      instance.currentCycle !== null
+        ? await getCashoutPlacementForCycle(instanceId, instance.currentCycle)
+        : null;
+    const officialResults =
+      instance.currentCycle !== null
+        ? await listOfficialResultsForTournamentInstance(
+            instanceId,
+            instance.currentCycle
+          )
+        : [];
+
+    const availableTournamentActions = getAvailableTournamentPanelActions({
+      status: instance.status,
+      currentStage: instance.currentStage,
+      currentCycle: instance.currentCycle,
+      isCheckInOpen: isCheckInOpen(instance),
+      checkedInCount,
+      maxTeams: instance.maxTeams,
+      hasUncheckedTeams: checkedInCount < instance.maxTeams,
+      hasCashoutAdvancementData:
+        instance.currentStage === TournamentStage.CASHOUT &&
+        stageSubmissions.filter((row) => row.status === "reviewed").length === 4 &&
+        Boolean(placements),
+      finalRoundOfficialResultsCount: officialResults.filter(
+        (result: { status: string }) => result.status === "active"
+      ).length,
+    });
+
+    if (!availableTournamentActions[tournamentAvailabilityKey]) {
+      await interaction.reply({
+        content: STALE_ACTION_MESSAGE,
+        flags: MessageFlags.Ephemeral,
+      });
+      return true;
+    }
+  }
 
   if (action === "refresh") {
     const panel = await buildTournamentPanel(instanceId);

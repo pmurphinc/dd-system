@@ -20,6 +20,8 @@ import {
 } from "../storage/tournamentInstances";
 import { listImportedTeamsForTournamentInstance } from "../storage/teams";
 import { getCashoutAssignedMapForCycle, normalizeMapBan } from "../storage/tournamentMaps";
+import { isCheckInOpen } from "./tournamentAccess";
+import { getAvailableTournamentPanelActions } from "./tournamentActionVisibility";
 
 function formatEnumLabel(value: string): string {
   return value
@@ -315,16 +317,41 @@ export async function buildTournamentPanel(
       { name: "Standings", value: standingsLabel.slice(0, 1024), inline: false }
     );
 
-  const showCheckInButtons = instance.currentCycle === null;
+  const reviewedStageSubmissions = stageSubmissions.filter(
+    (row: { status: string }) => row.status === "reviewed"
+  );
+  const hasCashoutAdvancementData =
+    instance.currentStage === TournamentStage.CASHOUT &&
+    reviewedStageSubmissions.length === 4 &&
+    Boolean(placements);
 
-  const rowOneButtons: ButtonBuilder[] = [];
+  const availableActions = getAvailableTournamentPanelActions({
+    status: instance.status,
+    currentStage: instance.currentStage,
+    currentCycle: instance.currentCycle,
+    isCheckInOpen: isCheckInOpen(instance),
+    checkedInCount,
+    maxTeams: instance.maxTeams,
+    hasUncheckedTeams: checkedInCount < instance.maxTeams,
+    hasCashoutAdvancementData,
+    finalRoundOfficialResultsCount: officialResults.filter(
+      (result: { status?: string }) => (result.status ?? "active") === "active"
+    ).length,
+  });
 
-  if (showCheckInButtons) {
-    rowOneButtons.push(
+  const adminButtons: ButtonBuilder[] = [];
+
+  if (availableActions.canOpenCheckIn) {
+    adminButtons.push(
       new ButtonBuilder()
         .setCustomId(`tournament:${instance.id}:open_checkin`)
         .setLabel("Open Check-In")
-        .setStyle(ButtonStyle.Success),
+        .setStyle(ButtonStyle.Success)
+    );
+  }
+
+  if (availableActions.canCloseCheckIn) {
+    adminButtons.push(
       new ButtonBuilder()
         .setCustomId(`tournament:${instance.id}:close_checkin`)
         .setLabel("Close Check-In")
@@ -332,64 +359,115 @@ export async function buildTournamentPanel(
     );
   }
 
-  rowOneButtons.push(
-    new ButtonBuilder()
-      .setCustomId(`tournament:${instance.id}:start_cycle_1`)
-      .setLabel("Start Cycle 1")
-      .setStyle(ButtonStyle.Primary),
-    new ButtonBuilder()
-      .setCustomId(`tournament:${instance.id}:force_checkin`)
-      .setLabel("Force Check-In")
-      .setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder()
-      .setCustomId(`tournament:${instance.id}:review_team_submissions`)
-      .setLabel("Review Team Submissions")
-      .setStyle(ButtonStyle.Secondary)
-  );
+  if (availableActions.canForceCheckIn) {
+    adminButtons.push(
+      new ButtonBuilder()
+        .setCustomId(`tournament:${instance.id}:force_checkin`)
+        .setLabel("Force Check-In")
+        .setStyle(ButtonStyle.Secondary)
+    );
+  }
 
-  const rowOne = new ActionRowBuilder<ButtonBuilder>().addComponents(rowOneButtons);
+  if (availableActions.canStartCycle1) {
+    adminButtons.push(
+      new ButtonBuilder()
+        .setCustomId(`tournament:${instance.id}:start_cycle_1`)
+        .setLabel("Start Cycle 1")
+        .setStyle(ButtonStyle.Primary)
+    );
+  }
 
-  const rowTwo = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder()
-      .setCustomId(`tournament:${instance.id}:finalize_cycle`)
-      .setLabel("Finalize Cycle")
-      .setStyle(ButtonStyle.Primary),
-    new ButtonBuilder()
-      .setCustomId(`tournament:${instance.id}:start_final_round`)
-      .setLabel("Start Final Round")
-      .setStyle(ButtonStyle.Primary),
-    new ButtonBuilder()
-      .setCustomId(`tournament:${instance.id}:start_cycle_2`)
-      .setLabel("Start Cycle 2")
-      .setStyle(ButtonStyle.Primary),
-    new ButtonBuilder()
-      .setCustomId(`tournament:${instance.id}:start_cycle_3`)
-      .setLabel("Start Cycle 3")
-      .setStyle(ButtonStyle.Primary),
-    new ButtonBuilder()
-      .setCustomId(`tournament:${instance.id}:finish`)
-      .setLabel("Finish Tournament")
-      .setStyle(ButtonStyle.Success)
-  );
+  if (availableActions.canReviewTeamSubmissions) {
+    adminButtons.push(
+      new ButtonBuilder()
+        .setCustomId(`tournament:${instance.id}:review_team_submissions`)
+        .setLabel("Review Team Submissions")
+        .setStyle(ButtonStyle.Secondary)
+    );
+  }
 
-  const rowThree = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder()
-      .setCustomId(`tournament:${instance.id}:approve_final_round_stage`)
-      .setLabel("Approve Final Round Stage")
-      .setStyle(ButtonStyle.Primary),
-    new ButtonBuilder()
-      .setCustomId(`tournament:${instance.id}:refresh`)
-      .setLabel("Refresh")
-      .setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder()
-      .setCustomId("tournament:change_instance")
-      .setLabel("Change Instance")
-      .setStyle(ButtonStyle.Secondary)
-  );
+  if (availableActions.canStartFinalRound) {
+    adminButtons.push(
+      new ButtonBuilder()
+        .setCustomId(`tournament:${instance.id}:start_final_round`)
+        .setLabel("Start Final Round")
+        .setStyle(ButtonStyle.Primary)
+    );
+  }
+
+  if (availableActions.canApproveFinalRoundStage) {
+    adminButtons.push(
+      new ButtonBuilder()
+        .setCustomId(`tournament:${instance.id}:approve_final_round_stage`)
+        .setLabel("Approve Final Round Stage")
+        .setStyle(ButtonStyle.Primary)
+    );
+  }
+
+  if (availableActions.canFinalizeCycle) {
+    adminButtons.push(
+      new ButtonBuilder()
+        .setCustomId(`tournament:${instance.id}:finalize_cycle`)
+        .setLabel("Finalize Cycle")
+        .setStyle(ButtonStyle.Primary)
+    );
+  }
+
+  if (availableActions.canStartCycle2) {
+    adminButtons.push(
+      new ButtonBuilder()
+        .setCustomId(`tournament:${instance.id}:start_cycle_2`)
+        .setLabel("Start Cycle 2")
+        .setStyle(ButtonStyle.Primary)
+    );
+  }
+
+  if (availableActions.canStartCycle3) {
+    adminButtons.push(
+      new ButtonBuilder()
+        .setCustomId(`tournament:${instance.id}:start_cycle_3`)
+        .setLabel("Start Cycle 3")
+        .setStyle(ButtonStyle.Primary)
+    );
+  }
+
+  if (availableActions.canFinishTournament) {
+    adminButtons.push(
+      new ButtonBuilder()
+        .setCustomId(`tournament:${instance.id}:finish`)
+        .setLabel("Finish Tournament")
+        .setStyle(ButtonStyle.Success)
+    );
+  }
+
+  if (availableActions.canRefresh) {
+    adminButtons.push(
+      new ButtonBuilder()
+        .setCustomId(`tournament:${instance.id}:refresh`)
+        .setLabel("Refresh")
+        .setStyle(ButtonStyle.Secondary)
+    );
+  }
+
+  if (availableActions.canChangeInstance) {
+    adminButtons.push(
+      new ButtonBuilder()
+        .setCustomId("tournament:change_instance")
+        .setLabel("Change Instance")
+        .setStyle(ButtonStyle.Secondary)
+    );
+  }
+
+  const components: Array<ActionRowBuilder<ButtonBuilder>> = [];
+  for (let index = 0; index < adminButtons.length; index += 5) {
+    components.push(
+      new ActionRowBuilder<ButtonBuilder>().addComponents(adminButtons.slice(index, index + 5))
+    );
+  }
 
   return {
     embeds: [embed],
-    components: [rowOne, rowTwo, rowThree],
+    components,
   };
 }
 
