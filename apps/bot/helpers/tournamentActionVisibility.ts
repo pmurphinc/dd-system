@@ -148,7 +148,8 @@ export function getAvailableTournamentPanelActions(
   const canCloseCheckIn = isRegistrationOrCheckin && isCheckInOpen && currentCycle === 1;
 
   const canForceCheckIn =
-    isRegistrationOrCheckin &&
+    currentStage === TournamentStage.CHECKIN &&
+    isCheckInOpen &&
     hasUncheckedTeams &&
     status !== TournamentInstanceStatus.COMPLETED &&
     status !== TournamentInstanceStatus.TIEBREAKER_READY;
