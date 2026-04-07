@@ -1,7 +1,7 @@
-import { TournamentStage } from "@prisma/client";
+import { Prisma, TournamentStage } from "@prisma/client";
 import { prisma } from "./prisma";
-import { listImportedTeamsForTournamentInstance } from "./teams";
 import { listMatchAssignmentsForTournamentInstance } from "./matchAssignments";
+import { listImportedTeamsForTournamentInstance } from "./teams";
 
 export const OFFICIAL_MAP_POOL = [
   "FANGWAI CITY",
@@ -15,6 +15,20 @@ export const OFFICIAL_MAP_POOL = [
   "SEOUL",
   "MONACO",
 ] as const;
+
+type MapAssignmentStatus =
+  | "assigned_new"
+  | "already_assigned"
+  | "no_legal_maps"
+  | "stage_not_applicable";
+
+export interface EnsureStageMapAssignedResult {
+  status: MapAssignmentStatus;
+  assignedMap: string | null;
+  bannedMaps: string[];
+  legalMaps: string[];
+  reason?: string;
+}
 
 function normalizeMapKey(value: string): string {
   return value
@@ -91,8 +105,51 @@ export async function assignCashoutMapForCycleIfMissing(
   tournamentInstanceId: number,
   cycleNumber: number
 ): Promise<string> {
+  const result = await ensureStageMapAssigned({
+    tournamentInstanceId,
+    cycleNumber,
+    stage: TournamentStage.CASHOUT,
+  });
+
+  if (result.status === "assigned_new" || result.status === "already_assigned") {
+    return result.assignedMap!;
+  }
+
+  if (result.reason === "missing_or_invalid_bans") {
+    throw new Error(
+      "Cannot assign cashout map. Missing/invalid team bans prevent legal map selection."
+    );
+  }
+
+  throw new Error("No maps remain after excluding team map bans for cashout. Admin override required.");
+}
+
+interface EnsureStageMapAssignedInput {
+  tournamentInstanceId: number;
+  cycleNumber: number;
+  stage: TournamentStage;
+  tx?: Prisma.TransactionClient;
+}
+
+export async function ensureStageMapAssigned(
+  input: EnsureStageMapAssignedInput
+): Promise<EnsureStageMapAssignedResult> {
+  const { tournamentInstanceId, cycleNumber, stage, tx } = input;
+  if (stage !== TournamentStage.CASHOUT) {
+    return {
+      status: "stage_not_applicable",
+      assignedMap: null,
+      bannedMaps: [],
+      legalMaps: [],
+    };
+  }
+
   await ensureMapColumns();
-  let placement = await prisma.cashoutPlacement.findUnique({
+  const db = tx ?? prisma;
+  const context = `instance=${tournamentInstanceId} cycle=${cycleNumber} stage=${stage}`;
+  console.log(`[stage-map-ensure] start ${context}`);
+
+  let placement = await db.cashoutPlacement.findUnique({
     where: {
       tournamentInstanceId_cycleNumber: {
         tournamentInstanceId,
@@ -102,13 +159,17 @@ export async function assignCashoutMapForCycleIfMissing(
   });
 
   if (!placement) {
-    const teams = await listImportedTeamsForTournamentInstance(tournamentInstanceId);
+    const teams = await db.team.findMany({
+      where: { tournamentInstanceId },
+      orderBy: { id: "asc" },
+      select: { id: true },
+    });
     if (teams.length !== 4) {
       throw new Error("Cashout map assignment requires exactly 4 teams in the tournament instance.");
     }
 
     const now = new Date();
-    await prisma.cashoutPlacement.upsert({
+    await db.cashoutPlacement.upsert({
       where: {
         tournamentInstanceId_cycleNumber: {
           tournamentInstanceId,
@@ -130,8 +191,7 @@ export async function assignCashoutMapForCycleIfMissing(
         updatedAt: now,
       },
     });
-
-    placement = await prisma.cashoutPlacement.findUnique({
+    placement = await db.cashoutPlacement.findUnique({
       where: {
         tournamentInstanceId_cycleNumber: {
           tournamentInstanceId,
@@ -139,48 +199,89 @@ export async function assignCashoutMapForCycleIfMissing(
         },
       },
     });
+  }
 
-    if (!placement) {
-      throw new Error("Failed to initialize cashout placement row for this cycle.");
-    }
+  if (!placement) {
+    throw new Error("Failed to initialize cashout placement row for this cycle.");
   }
 
   if (placement.assignedMap?.trim()) {
-    return placement.assignedMap;
+    console.log(`[stage-map-ensure] already_assigned ${context} map=${placement.assignedMap}`);
+    return {
+      status: "already_assigned",
+      assignedMap: placement.assignedMap,
+      bannedMaps: [],
+      legalMaps: [],
+    };
   }
 
-  const teams = await listImportedTeamsForTournamentInstance(tournamentInstanceId);
-  if (teams.length !== 4) {
-    throw new Error("Cashout map assignment requires exactly 4 teams in the tournament instance.");
-  }
+  const teams = await db.team.findMany({
+    where: { tournamentInstanceId },
+    orderBy: { id: "asc" },
+    select: { teamName: true, mapBan: true },
+  });
 
-  const missingBanTeams = teams.filter((team) => !normalizeMapBan(team.mapBan));
-  if (missingBanTeams.length > 0) {
-    throw new Error(
-      `Cannot assign cashout map. Missing/invalid team bans: ${missingBanTeams
+  const normalizedBans = teams.map((team) => normalizeMapBan(team.mapBan));
+  const missingBanTeams = teams.filter((_, index) => !normalizedBans[index]);
+  const bannedMaps = normalizedBans.filter((ban): ban is string => Boolean(ban));
+  const legalMaps = buildPoolExcludingBans(bannedMaps);
+  console.log(
+    `[stage-map-ensure] bans ${context} banned=[${bannedMaps.join(", ")}] legal=[${legalMaps.join(
+      ", "
+    )}]`
+  );
+
+  if (missingBanTeams.length > 0 || legalMaps.length === 0) {
+    const reason =
+      missingBanTeams.length > 0 ? "missing_or_invalid_bans" : "no_legal_maps_after_bans";
+    console.warn(
+      `[stage-map-ensure] no_legal_maps ${context} reason=${reason} missingTeams=${missingBanTeams
         .map((team) => team.teamName)
-        .join(", ")}.`
+        .join(",")}`
     );
+    return {
+      status: "no_legal_maps",
+      assignedMap: null,
+      bannedMaps,
+      legalMaps,
+      reason,
+    };
   }
 
-  const availableMaps = buildPoolExcludingBans(teams.map((team) => team.mapBan));
-  if (availableMaps.length === 0) {
-    throw new Error(
-      "No maps remain after excluding team map bans for cashout. Admin override required."
-    );
-  }
-
-  const assignedMap = pickRandomMap(availableMaps);
-
-  await prisma.cashoutPlacement.update({
-    where: { id: placement.id },
+  const pickedMap = pickRandomMap(legalMaps);
+  const updated = await db.cashoutPlacement.updateMany({
+    where: {
+      id: placement.id,
+      OR: [{ assignedMap: null }, { assignedMap: "" }],
+    },
     data: {
-      assignedMap,
+      assignedMap: pickedMap,
       updatedAt: new Date(),
     },
   });
 
-  return assignedMap;
+  if (updated.count === 0) {
+    const current = await db.cashoutPlacement.findUnique({
+      where: { id: placement.id },
+    });
+    console.log(
+      `[stage-map-ensure] already_assigned_race ${context} map=${current?.assignedMap ?? "<none>"}`
+    );
+    return {
+      status: "already_assigned",
+      assignedMap: current?.assignedMap ?? null,
+      bannedMaps,
+      legalMaps,
+    };
+  }
+
+  console.log(`[stage-map-ensure] assigned_new ${context} map=${pickedMap}`);
+  return {
+    status: "assigned_new",
+    assignedMap: pickedMap,
+    bannedMaps,
+    legalMaps,
+  };
 }
 
 export async function getCashoutAssignedMapForCycle(

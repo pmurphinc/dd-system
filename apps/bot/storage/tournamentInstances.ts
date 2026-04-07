@@ -10,7 +10,7 @@ import {
   assignTeamToTournamentInstance,
 } from "./teams";
 import { pushTournamentWebhookUpdate } from "../services/tournamentWebhook";
-import { assignCashoutMapForCycleIfMissing, normalizeMapBan } from "./tournamentMaps";
+import { ensureStageMapAssigned, normalizeMapBan } from "./tournamentMaps";
 
 export interface StoredTournamentInstance {
   id: number;
@@ -350,7 +350,14 @@ export async function handleTournamentLeaderCheckIn(
   });
 
   if (nextStage === TournamentStage.CASHOUT) {
-    await assignCashoutMapForCycleIfMissing(tournamentInstanceId, 1);
+    const mapResult = await ensureStageMapAssigned({
+      tournamentInstanceId,
+      cycleNumber: 1,
+      stage: TournamentStage.CASHOUT,
+    });
+    console.log(
+      `[checkin-map-ensure] path=leader_checkin instance=${tournamentInstanceId} cycle=1 status=${mapResult.status} map=${mapResult.assignedMap ?? "<none>"}`
+    );
   }
 
   await pushTournamentWebhookUpdate({
@@ -449,7 +456,14 @@ export async function startTournamentCycle(
       updatedAt: new Date(),
     },
   });
-  await assignCashoutMapForCycleIfMissing(tournamentInstanceId, cycleNumber);
+  const mapResult = await ensureStageMapAssigned({
+    tournamentInstanceId,
+    cycleNumber,
+    stage: TournamentStage.CASHOUT,
+  });
+  console.log(
+    `[checkin-map-ensure] path=start_cycle instance=${tournamentInstanceId} cycle=${cycleNumber} status=${mapResult.status} map=${mapResult.assignedMap ?? "<none>"}`
+  );
 
   await pushTournamentWebhookUpdate({
     tournamentInstanceId,

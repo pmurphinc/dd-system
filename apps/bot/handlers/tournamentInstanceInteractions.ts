@@ -53,7 +53,6 @@ import {
   rejectTeamStageSubmission,
 } from "../storage/reportSubmissions";
 import {
-  assignCashoutMapForCycleIfMissing,
   assignFinalRoundMapsIfMissing,
 } from "../storage/tournamentMaps";
 import {
@@ -1198,6 +1197,9 @@ export async function handleTournamentInstanceButton(
 
     if (action === "checkin") {
       try {
+        console.log(
+          `[checkin-path] type=normal instance=${instanceId} team=${team.id} user=${interaction.user.id}`
+        );
         await deferEphemeralResponse();
         await handleTournamentLeaderCheckIn(instanceId, team.id, interaction.user.id);
 
@@ -1331,6 +1333,9 @@ export async function handleTournamentInstanceButton(
     }
 
     try {
+      console.log(
+        `[checkin-path] type=force instance=${instanceId} team=${teamId} user=${interaction.user.id}`
+      );
       await deferEphemeralResponse();
       await handleTournamentLeaderCheckIn(instanceId, teamId, interaction.user.id);
       const panel = await buildTournamentPanel(instanceId);
@@ -1670,7 +1675,6 @@ export async function handleTournamentInstanceButton(
         cycleNumber,
         interaction.user.id
       );
-      await assignCashoutMapForCycleIfMissing(instanceId, cycleNumber);
       const panel = await buildTournamentPanel(updated.id);
       await interaction.editReply({
         content: `${updated.name} is ready for cycle ${cycleNumber} cashout.`,
