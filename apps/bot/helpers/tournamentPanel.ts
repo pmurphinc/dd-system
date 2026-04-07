@@ -440,6 +440,15 @@ export async function buildTournamentPanel(
     );
   }
 
+  if (availableActions.canRestartTournament) {
+    adminButtons.push(
+      new ButtonBuilder()
+        .setCustomId(`tournament:${instance.id}:restart_tournament`)
+        .setLabel("Restart Tournament")
+        .setStyle(ButtonStyle.Danger)
+    );
+  }
+
   if (availableActions.canRefresh) {
     adminButtons.push(
       new ButtonBuilder()

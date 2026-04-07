@@ -66,6 +66,7 @@ import {
   openTournamentCheckIn,
   reopenTournamentCheckIn,
   reopenTournamentCycle,
+  restartTournamentInstance,
   setTournamentInstanceFinalRoundReady,
   startTournamentCycle,
 } from "../storage/tournamentInstances";
@@ -95,6 +96,7 @@ type TournamentPanelAction =
   | "start_cycle_2"
   | "start_cycle_3"
   | "finish"
+  | "restart_tournament"
   | "approve_final_round_stage"
   | "refresh";
 
@@ -142,6 +144,7 @@ function getTournamentActionAvailabilityKey(
   if (action === "approve_final_round_stage") return "canApproveFinalRoundStage";
   if (action === "finalize_cycle") return "canFinalizeCycle";
   if (action === "finish") return "canFinishTournament";
+  if (action === "restart_tournament") return "canRestartTournament";
   if (action === "refresh") return "canRefresh";
   return null;
 }
@@ -1382,6 +1385,68 @@ export async function handleTournamentInstanceButton(
     return true;
   }
 
+  if (interaction.customId.startsWith("tournament:restart_tournament_confirm:")) {
+    const [, , instanceIdRaw, actorDiscordUserId] = interaction.customId.split(":");
+    const instanceId = Number(instanceIdRaw);
+
+    if (actorDiscordUserId !== interaction.user.id) {
+      await interaction.reply({
+        content: "This confirmation is stale. Run Restart Tournament again from the panel.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return true;
+    }
+
+    try {
+      await deferEphemeralResponse();
+      const updated = await restartTournamentInstance(instanceId, interaction.user.id);
+      const panel = await buildTournamentPanel(updated.id);
+      await interaction.editReply({
+        content:
+          `${updated.name} was restarted.\n` +
+          `• Teams remained assigned to this instance.\n` +
+          `• Team check-ins were cleared.\n` +
+          `• FRP standings were reset to 0.\n` +
+          `• Cycle/match submissions, placements, assignments, and results were cleared.`,
+        ...panel,
+      });
+    } catch (error) {
+      if (!interaction.deferred && !interaction.replied) {
+        await deferEphemeralResponse();
+      }
+
+      await interaction.editReply({
+        content:
+          error instanceof Error
+            ? error.message
+            : "Failed to restart tournament progress for this instance.",
+      });
+    }
+
+    return true;
+  }
+
+  if (interaction.customId.startsWith("tournament:restart_tournament_cancel:")) {
+    const [, , instanceIdRaw, actorDiscordUserId] = interaction.customId.split(":");
+    const instanceId = Number(instanceIdRaw);
+
+    if (actorDiscordUserId !== interaction.user.id) {
+      await interaction.reply({
+        content: "This confirmation is stale. Run Restart Tournament again from the panel.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return true;
+    }
+
+    const panel = await buildTournamentPanel(instanceId);
+    await interaction.reply({
+      content: "Restart cancelled. No tournament data was changed.",
+      ...panel,
+      flags: MessageFlags.Ephemeral,
+    });
+    return true;
+  }
+
   if (interaction.customId.startsWith("tournament:approve_all_cashout_submissions:")) {
     const [, , instanceIdRaw] = interaction.customId.split(":");
     const instanceId = Number(instanceIdRaw);
@@ -1812,6 +1877,37 @@ export async function handleTournamentInstanceButton(
         flags: MessageFlags.Ephemeral,
       });
     }
+    return true;
+  }
+
+  if (action === "restart_tournament") {
+    await interaction.reply({
+      content:
+        "⚠️ **Confirm Restart Tournament**\n" +
+        "This will restart only this tournament instance run.\n\n" +
+        "• Teams and instance membership will remain assigned.\n" +
+        "• Team check-ins will be cleared.\n" +
+        "• FRP/standings will be reset to 0.\n" +
+        "• Cycle/match progress, placements, submissions, and results will be wiped.\n\n" +
+        "**This cannot be undone.**",
+      components: [
+        new ActionRowBuilder<ButtonBuilder>().addComponents(
+          new ButtonBuilder()
+            .setCustomId(
+              `tournament:restart_tournament_confirm:${instanceId}:${interaction.user.id}`
+            )
+            .setLabel("Confirm Restart Tournament")
+            .setStyle(ButtonStyle.Danger),
+          new ButtonBuilder()
+            .setCustomId(
+              `tournament:restart_tournament_cancel:${instanceId}:${interaction.user.id}`
+            )
+            .setLabel("Cancel")
+            .setStyle(ButtonStyle.Secondary)
+        ),
+      ],
+      flags: MessageFlags.Ephemeral,
+    });
     return true;
   }
 

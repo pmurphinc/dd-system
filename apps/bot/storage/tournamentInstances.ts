@@ -742,3 +742,108 @@ export async function resetTournamentInstance(
 
   return normalizeInstance(updated!);
 }
+
+export async function restartTournamentInstance(
+  tournamentInstanceId: number,
+  actorDiscordUserId: string
+): Promise<StoredTournamentInstance> {
+  const instance = await prisma.tournamentInstance.findUnique({
+    where: { id: tournamentInstanceId },
+  });
+
+  if (!instance) {
+    throw new Error("Tournament instance not found.");
+  }
+
+  await prisma.$transaction(async (tx: any) => {
+    const now = new Date();
+    const assignedTeams = await tx.team.findMany({
+      where: { tournamentInstanceId },
+      select: { id: true, teamName: true },
+    });
+    const assignmentRows = await tx.matchAssignment.findMany({
+      where: { tournamentInstanceId },
+      select: { id: true },
+    });
+
+    if (assignmentRows.length > 0) {
+      await tx.cycleResult.deleteMany({
+        where: {
+          matchAssignmentId: {
+            in: assignmentRows.map((row: { id: number }) => row.id),
+          },
+        },
+      });
+    }
+
+    await tx.reportSubmission.deleteMany({
+      where: { tournamentInstanceId },
+    });
+
+    await tx.officialMatchResult.deleteMany({
+      where: { tournamentInstanceId },
+    });
+
+    await tx.matchAssignment.deleteMany({
+      where: { tournamentInstanceId },
+    });
+
+    await tx.cashoutPlacement.deleteMany({
+      where: { tournamentInstanceId },
+    });
+
+    await tx.standing.deleteMany({
+      where: { tournamentInstanceId },
+    });
+
+    if (assignedTeams.length > 0) {
+      await tx.standing.createMany({
+        data: assignedTeams.map((team: { id: number; teamName: string }) => ({
+          tournamentInstanceId,
+          teamId: team.id,
+          teamName: team.teamName,
+          frp: 0,
+          updatedAt: now,
+        })),
+      });
+    }
+
+    await tx.team.updateMany({
+      where: { tournamentInstanceId },
+      data: {
+        checkInStatus: "Not Checked In",
+      },
+    });
+
+    await tx.tournamentInstance.update({
+      where: { id: tournamentInstanceId },
+      data: {
+        status: TournamentInstanceStatus.REGISTRATION_READY,
+        currentCycle: 1,
+        currentStage: TournamentStage.REGISTRATION,
+        winningTeamId: null,
+        updatedAt: now,
+      },
+    });
+  });
+
+  await createAuditLog({
+    guildId: instance.guildId,
+    action: "tournament_instance_restarted",
+    entityType: "tournament_instance",
+    entityId: `${tournamentInstanceId}`,
+    summary: `Restarted ${getTournamentInstanceLabel(instance)} tournament progress while preserving teams.`,
+    actorDiscordUserId,
+  });
+
+  await pushTournamentWebhookUpdate({
+    tournamentInstanceId,
+    reason: "tournament_restarted",
+  });
+
+  const updated = await prisma.tournamentInstance.findUnique({
+    where: { id: tournamentInstanceId },
+  });
+
+  return normalizeInstance(updated!);
+}
