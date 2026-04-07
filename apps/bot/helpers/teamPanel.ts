@@ -21,6 +21,7 @@ import {
 } from "../storage/tournamentInstances";
 import { getAssignedMapForTeamCurrentStage } from "../storage/tournamentMaps";
 import { isCheckInOpen } from "./tournamentAccess";
+import { getAvailableTeamPanelActions } from "./tournamentActionVisibility";
 import { getTeamLeaderAccessDebug } from "./permissions";
 
 function getStageLabel(stage?: string | null): string {
@@ -221,43 +222,75 @@ export async function buildTeamPanel(
   rows.push(refreshRow);
 
   if (leaderAccess.isLeader && instance) {
-    const canEditSubmission =
-      currentSubmission !== null && currentSubmission.status !== "reviewed";
-    const canSubmitCashout =
-      currentStage === TournamentStage.CASHOUT && currentCycle !== null;
-    const canSubmitFinalRound =
-      currentStage === TournamentStage.FINAL_ROUND && currentCycle !== null && !!assignment;
+    const availableActions = getAvailableTeamPanelActions({
+      isLeader: leaderAccess.isLeader,
+      hasInstance: true,
+      teamBelongsToInstance: team.tournamentInstanceId === instance.id,
+      isCheckInOpen: isCheckInOpen(instance),
+      isTeamCheckedIn: isTeamCheckedIn(team.checkInStatus),
+      currentStage,
+      currentCycle,
+      hasCurrentStageAssignment: Boolean(assignment),
+      hasCurrentStageSubmission: currentSubmission !== null,
+      isCurrentStageSubmissionEditable:
+        currentSubmission !== null && currentSubmission.status !== "reviewed",
+      currentSubmissionType:
+        currentSubmissionType === "CASHOUT_PLACEMENT" ||
+        currentSubmissionType === "FINAL_ROUND_SCORE"
+          ? currentSubmissionType
+          : null,
+    });
 
-    const leaderRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
-      new ButtonBuilder()
-        .setCustomId(`team:checkin:${instance.id}:${team.id}`)
-        .setLabel("Check In")
-        .setStyle(ButtonStyle.Success)
-        .setDisabled(
-          !isCheckInOpen(instance) || isTeamCheckedIn(team.checkInStatus)
-        ),
-      new ButtonBuilder()
-        .setCustomId(`team:submit_cashout:${instance.id}:${team.id}`)
-        .setLabel("Submit Cashout Placement")
-        .setStyle(ButtonStyle.Primary)
-        .setDisabled(!canSubmitCashout),
-      new ButtonBuilder()
-        .setCustomId(`team:submit_final_round:${instance.id}:${team.id}`)
-        .setLabel("Submit Final Round Score")
-        .setStyle(ButtonStyle.Primary)
-        .setDisabled(!canSubmitFinalRound),
-      new ButtonBuilder()
-        .setCustomId(
-          currentSubmissionType === "CASHOUT_PLACEMENT"
-            ? `team:edit_cashout:${instance.id}:${team.id}`
-            : `team:edit_final_round:${instance.id}:${team.id}`
-        )
-        .setLabel("Edit Submitted Result")
-        .setStyle(ButtonStyle.Secondary)
-        .setDisabled(!canEditSubmission)
-    );
+    const leaderButtons: ButtonBuilder[] = [];
 
-    rows.unshift(leaderRow);
+    if (availableActions.canCheckIn) {
+      leaderButtons.push(
+        new ButtonBuilder()
+          .setCustomId(`team:checkin:${instance.id}:${team.id}`)
+          .setLabel("Check In")
+          .setStyle(ButtonStyle.Success)
+      );
+    }
+
+    if (availableActions.canSubmitCashout) {
+      leaderButtons.push(
+        new ButtonBuilder()
+          .setCustomId(`team:submit_cashout:${instance.id}:${team.id}`)
+          .setLabel("Submit Cashout Placement")
+          .setStyle(ButtonStyle.Primary)
+      );
+    }
+
+    if (availableActions.canSubmitFinalRound) {
+      leaderButtons.push(
+        new ButtonBuilder()
+          .setCustomId(`team:submit_final_round:${instance.id}:${team.id}`)
+          .setLabel("Submit Final Round Score")
+          .setStyle(ButtonStyle.Primary)
+      );
+    }
+
+    if (availableActions.canEditCashout) {
+      leaderButtons.push(
+        new ButtonBuilder()
+          .setCustomId(`team:edit_cashout:${instance.id}:${team.id}`)
+          .setLabel("Edit Submitted Result")
+          .setStyle(ButtonStyle.Secondary)
+      );
+    }
+
+    if (availableActions.canEditFinalRound) {
+      leaderButtons.push(
+        new ButtonBuilder()
+          .setCustomId(`team:edit_final_round:${instance.id}:${team.id}`)
+          .setLabel("Edit Submitted Result")
+          .setStyle(ButtonStyle.Secondary)
+      );
+    }
+
+    if (leaderButtons.length > 0) {
+      rows.unshift(new ActionRowBuilder<ButtonBuilder>().addComponents(leaderButtons));
+    }
   }
 
   return {
