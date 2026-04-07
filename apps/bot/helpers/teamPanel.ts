@@ -19,7 +19,7 @@ import {
   getTournamentInstanceById,
   syncTournamentInstancesForGuild,
 } from "../storage/tournamentInstances";
-import { getAssignedMapForTeamCurrentStage } from "../storage/tournamentMaps";
+import { ensureStageMapAssigned, getAssignedMapForTeamCurrentStage } from "../storage/tournamentMaps";
 import { isCheckInOpen } from "./tournamentAccess";
 import { getAvailableTeamPanelActions } from "./tournamentActionVisibility";
 import { getTeamLeaderAccessDebug } from "./permissions";
@@ -129,10 +129,28 @@ export async function buildTeamPanel(
   const currentSubmissionType = currentSubmission
     ? getTeamStageSubmissionType(currentSubmission)
     : null;
+  const cashoutMapEnsureResult =
+    instance && currentCycle && currentStage === TournamentStage.CASHOUT
+      ? await ensureStageMapAssigned({
+          tournamentInstanceId: instance.id,
+          cycleNumber: currentCycle,
+          stage: TournamentStage.CASHOUT,
+        })
+      : null;
+  if (cashoutMapEnsureResult) {
+    console.log(
+      `[team-panel-map] instance=${instance!.id} cycle=${currentCycle} team=${team.id} ensureStatus=${cashoutMapEnsureResult.status} map=${cashoutMapEnsureResult.assignedMap ?? "<none>"}`
+    );
+  }
   const assignedMap =
     instance && currentCycle && currentStage
       ? await getAssignedMapForTeamCurrentStage(instance.id, team.id, currentCycle, currentStage)
       : null;
+  const assignedMapLabel =
+    assignedMap ??
+    (cashoutMapEnsureResult?.status === "no_legal_maps"
+      ? "No legal maps remain"
+      : "Not assigned");
 
   if (currentStage === TournamentStage.FINAL_ROUND) {
     console.log(
@@ -173,7 +191,7 @@ export async function buildTeamPanel(
     },
     {
       name: "Assigned Map",
-      value: assignedMap ?? "Not assigned",
+      value: assignedMapLabel,
       inline: true,
     },
   ];

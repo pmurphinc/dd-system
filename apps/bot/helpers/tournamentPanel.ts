@@ -19,7 +19,11 @@ import {
   syncTournamentInstancesForGuild,
 } from "../storage/tournamentInstances";
 import { listImportedTeamsForTournamentInstance } from "../storage/teams";
-import { getCashoutAssignedMapForCycle, normalizeMapBan } from "../storage/tournamentMaps";
+import {
+  ensureStageMapAssigned,
+  getCashoutAssignedMapForCycle,
+  normalizeMapBan,
+} from "../storage/tournamentMaps";
 import { isCheckInOpen } from "./tournamentAccess";
 import { getAvailableTournamentPanelActions } from "./tournamentActionVisibility";
 
@@ -131,10 +135,28 @@ export async function buildTournamentPanel(
 
   const pendingCount = stageSubmissions.filter((row: { status: string }) => row.status === "pending").length;
   const approvedCount = stageSubmissions.filter((row: { status: string }) => row.status === "reviewed").length;
+  const cashoutMapEnsureResult =
+    instance.currentCycle !== null && instance.currentStage === TournamentStage.CASHOUT
+      ? await ensureStageMapAssigned({
+      tournamentInstanceId: instance.id,
+      cycleNumber: instance.currentCycle,
+      stage: TournamentStage.CASHOUT,
+        })
+      : null;
+  if (cashoutMapEnsureResult) {
+    console.log(
+      `[tournament-panel-map] instance=${instance.id} cycle=${instance.currentCycle} ensureStatus=${cashoutMapEnsureResult.status} map=${cashoutMapEnsureResult.assignedMap ?? "<none>"}`
+    );
+  }
   const cashoutAssignedMap =
     instance.currentCycle !== null
       ? await getCashoutAssignedMapForCycle(instance.id, instance.currentCycle)
       : null;
+  const cashoutAssignedMapLabel =
+    cashoutAssignedMap ??
+    (cashoutMapEnsureResult?.status === "no_legal_maps"
+      ? "No legal maps remain (check bans)"
+      : "Not assigned");
 
   const getTeamNameById = (teamId?: number | null) => {
     if (!teamId) return "Not set";
@@ -275,7 +297,7 @@ export async function buildTournamentPanel(
       },
       {
         name: "Cashout Assigned Map",
-        value: cashoutAssignedMap ?? "Not assigned",
+        value: cashoutAssignedMapLabel,
         inline: true,
       },
       {

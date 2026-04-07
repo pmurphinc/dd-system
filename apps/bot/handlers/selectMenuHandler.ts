@@ -11,10 +11,11 @@ import { hasAdminInteractionAccess } from "../helpers/permissions";
 import { buildReviewPanel } from "../helpers/reviewPanel";
 import { buildTournamentPanel } from "../helpers/tournamentPanel";
 import { getMatchAssignmentById } from "../domain/reportAssignment";
-import { setTeamPlacement, setTeamCheckInStatus } from "../storage/teams";
+import { setTeamPlacement, getTeamById } from "../storage/teams";
 import { getReportSubmissionById } from "../storage/reportSubmissions";
 import { handleTournamentInstanceSelectMenu } from "./tournamentInstanceInteractions";
 import { handleFounderAdminSelectMenu } from "./founderAdminInteractions";
+import { handleTournamentLeaderCheckIn } from "../storage/tournamentInstances";
 
 export async function handleSelectMenuInteraction(
   interaction: StringSelectMenuInteraction
@@ -125,8 +126,24 @@ export async function handleSelectMenuInteraction(
     }
 
     const teamId = Number(interaction.values[0]);
-    await setTeamCheckInStatus(teamId, "Checked In", interaction.user.id);
-    const tournamentPanel = await buildTournamentPanel();
+    const team = await getTeamById(teamId);
+    if (!team || team.tournamentInstanceId === null) {
+      await interaction.reply({
+        content: "Selected team is not assigned to a tournament instance.",
+        ephemeral: true,
+      });
+      return;
+    }
+
+    console.log(
+      `[checkin-path] type=legacy_admin_select instance=${team.tournamentInstanceId} team=${teamId} user=${interaction.user.id}`
+    );
+    await handleTournamentLeaderCheckIn(
+      team.tournamentInstanceId,
+      teamId,
+      interaction.user.id
+    );
+    const tournamentPanel = await buildTournamentPanel(team.tournamentInstanceId);
 
     await interaction.reply({
       content: `Team ${teamId} marked checked in.`,
