@@ -341,18 +341,18 @@ const menu = new StringSelectMenuBuilder()
   }
 
   if (action === "confirm_reset") {
+    await interaction.deferReply({ ephemeral: true });
+
     try {
       await resetTournamentInstance(instanceId, interaction.user.id);
       const panel = await buildAdminPanel(guildId, instanceId);
-      await interaction.reply({
+      await interaction.editReply({
         content: "Tournament instance has been reset.",
         ...panel,
-        ephemeral: true,
       });
     } catch (error) {
-      await interaction.reply({
+      await interaction.editReply({
         content: error instanceof Error ? error.message : "Reset failed.",
-        ephemeral: true,
       });
     }
     return true;
