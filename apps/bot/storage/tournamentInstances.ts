@@ -349,6 +349,10 @@ export async function handleTournamentLeaderCheckIn(
     },
   });
 
+  if (nextStage === TournamentStage.CASHOUT) {
+    await assignCashoutMapForCycleIfMissing(tournamentInstanceId, 1);
+  }
+
   await pushTournamentWebhookUpdate({
     tournamentInstanceId,
     reason: "leader_checked_in",
