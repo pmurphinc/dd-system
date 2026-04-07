@@ -96,6 +96,7 @@ export interface TournamentPanelActionAvailability {
   canApproveFinalRoundStage: boolean;
   canFinalizeCycle: boolean;
   canFinishTournament: boolean;
+  canRestartTournament: boolean;
   canRefresh: boolean;
   canChangeInstance: boolean;
 }
@@ -188,6 +189,7 @@ export function getAvailableTournamentPanelActions(
     canApproveFinalRoundStage,
     canFinalizeCycle,
     canFinishTournament,
+    canRestartTournament: true,
     canRefresh: true,
     canChangeInstance: true,
   };
