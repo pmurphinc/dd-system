@@ -1,5 +1,7 @@
 import { prisma } from "./prisma";
 import { createAuditLog } from "./auditLog";
+import { upsertCashoutFirstPlaceFrpBonus } from "./cashoutFrpBonuses";
+import { recomputeStandingsForTournamentInstance } from "./standings";
 
 export interface CashoutPlacementInput {
   tournamentInstanceId: number;
@@ -147,6 +149,14 @@ export async function upsertCashoutPlacement(
     `[final-round-pairings] cycle=${input.cycleNumber} assignments=${summary || "none"}`
   );
 
+  await upsertCashoutFirstPlaceFrpBonus({
+    tournamentInstanceId: input.tournamentInstanceId,
+    cycleNumber: input.cycleNumber,
+    teamId: firstTeam.id,
+    teamName: firstTeam.teamName,
+    actorDiscordUserId: input.actorDiscordUserId,
+  });
+
   await createAuditLog({
     action: "cashout_placements_recorded",
     entityType: "tournament_instance",
@@ -155,6 +165,8 @@ export async function upsertCashoutPlacement(
     details: `1st ${firstTeam.teamName}, 2nd ${secondTeam.teamName}, 3rd ${thirdTeam.teamName}, 4th ${fourthTeam.teamName}.`,
     actorDiscordUserId: input.actorDiscordUserId,
   });
+
+  await recomputeStandingsForTournamentInstance(input.tournamentInstanceId);
 }
 
 export async function getCashoutPlacementForCycle(

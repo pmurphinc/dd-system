@@ -269,6 +269,7 @@ model TournamentInstance {
   officialMatchResults OfficialMatchResult[]
   standings     Standing[]
   cashoutPlacements CashoutPlacement[]
+  cashoutFrpBonuses CashoutFrpBonus[]
 
   @@unique([guildId, name])
   @@unique([guildId, internalKey])
@@ -284,6 +285,21 @@ model CashoutPlacement {
   thirdPlaceTeamId     Int
   fourthPlaceTeamId    Int
   assignedMap          String?
+  createdAt            DateTime
+  updatedAt            DateTime
+  tournamentInstance   TournamentInstance @relation(fields: [tournamentInstanceId], references: [id], onDelete: Cascade)
+
+  @@unique([tournamentInstanceId, cycleNumber])
+}
+
+model CashoutFrpBonus {
+  id                   Int                @id @default(autoincrement())
+  tournamentInstanceId Int
+  cycleNumber          Int
+  teamId               Int
+  teamName             String
+  frpAwarded           Int                @default(1)
+  reason               String             @default("CASHOUT_FIRST_PLACE")
   createdAt            DateTime
   updatedAt            DateTime
   tournamentInstance   TournamentInstance @relation(fields: [tournamentInstanceId], references: [id], onDelete: Cascade)

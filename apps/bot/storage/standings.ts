@@ -1,4 +1,5 @@
 import { PrismaDbClient, prisma } from "./prisma";
+import { StoredCashoutFrpBonus, listCashoutFrpBonusesForTournamentInstance } from "./cashoutFrpBonuses";
 import { listImportedTeams, listImportedTeamsForTournamentInstance } from "./teams";
 
 export interface StoredStanding {
@@ -9,6 +10,56 @@ export interface StoredStanding {
   teamName: string;
   frp: number;
   updatedAt: Date;
+}
+
+interface FrpBearingTeam {
+  id: number;
+  teamName: string;
+}
+
+interface StandingOfficialResult {
+  teamId: number;
+  opponentTeamId: number;
+  frpAwardedToTeam: number;
+  frpAwardedToOpponent: number;
+}
+
+export function buildStandingsFrpTotals(
+  teams: FrpBearingTeam[],
+  officialResults: StandingOfficialResult[],
+  cashoutFrpBonuses: Pick<StoredCashoutFrpBonus, "teamId" | "teamName" | "frpAwarded">[]
+): Map<number, { teamName: string; frp: number }> {
+  const totals = new Map<number, { teamName: string; frp: number }>();
+
+  for (const team of teams) {
+    totals.set(team.id, {
+      teamName: team.teamName,
+      frp: 0,
+    });
+  }
+
+  for (const result of officialResults) {
+    const teamTotals = totals.get(result.teamId);
+    const opponentTotals = totals.get(result.opponentTeamId);
+
+    if (teamTotals) {
+      teamTotals.frp += result.frpAwardedToTeam;
+    }
+
+    if (opponentTotals) {
+      opponentTotals.frp += result.frpAwardedToOpponent;
+    }
+  }
+
+  for (const bonus of cashoutFrpBonuses) {
+    const entry = totals.get(bonus.teamId);
+
+    if (entry) {
+      entry.frp += bonus.frpAwarded;
+    }
+  }
+
+  return totals;
 }
 
 let standingsTableReady: Promise<void> | undefined;
@@ -120,34 +171,22 @@ export async function recomputeStandingsForTournamentInstance(
 ): Promise<void> {
   await ensureStandingsSeedData(tournamentInstanceId, db);
   const teams = await listImportedTeamsForTournamentInstance(tournamentInstanceId);
-  const totals = new Map<number, { teamName: string; frp: number }>();
 
-  for (const team of teams) {
-    totals.set(team.id, {
-      teamName: team.teamName,
-      frp: 0,
-    });
-  }
+  const [officialResults, cashoutFrpBonuses] = await Promise.all([
+    db.officialMatchResult.findMany({
+      where: {
+        tournamentInstanceId,
+        status: "active",
+      },
+    }),
+    listCashoutFrpBonusesForTournamentInstance(tournamentInstanceId, undefined, db),
+  ]);
 
-  const officialResults = await db.officialMatchResult.findMany({
-    where: {
-      tournamentInstanceId,
-      status: "active",
-    },
-  });
-
-  for (const result of officialResults) {
-    const teamTotals = totals.get(result.teamId);
-    const opponentTotals = totals.get(result.opponentTeamId);
-
-    if (teamTotals) {
-      teamTotals.frp += result.frpAwardedToTeam;
-    }
-
-    if (opponentTotals) {
-      opponentTotals.frp += result.frpAwardedToOpponent;
-    }
-  }
+  const totals = buildStandingsFrpTotals(
+    teams.map((team) => ({ id: team.id, teamName: team.teamName })),
+    officialResults,
+    cashoutFrpBonuses
+  );
 
   for (const [teamId, entry] of totals.entries()) {
     await setTeamFrp(

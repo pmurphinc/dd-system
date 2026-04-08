@@ -18,6 +18,7 @@ export const helpCommand: BotCommand = {
           "Public: /register /standings /help /ping",
           "Participant: /team /match /checkin (opens /team) /report",
           "Admin: /review /reports /tournament /status /cycleresults /syncstatus",
+          "Scoring: 1st place in Cashout awards +1 FRP, plus any Final Round FRP earned.",
           "Founder: /admin",
         ].join("\n")
       );

@@ -713,7 +713,25 @@ export async function resetTournamentInstance(
       where: { tournamentInstanceId },
     }).catch(() => {});
 
-    // 6. Unassign all teams + reset check-in
+    // 6. Clear cashout FRP bonuses
+    await tx.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS "CashoutFrpBonus" (
+        "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+        "tournamentInstanceId" INTEGER NOT NULL,
+        "cycleNumber" INTEGER NOT NULL,
+        "teamId" INTEGER NOT NULL,
+        "teamName" TEXT NOT NULL,
+        "frpAwarded" INTEGER NOT NULL DEFAULT 1,
+        "reason" TEXT NOT NULL DEFAULT 'CASHOUT_FIRST_PLACE',
+        "createdAt" DATETIME NOT NULL,
+        "updatedAt" DATETIME NOT NULL
+      )
+    `);
+    await tx.$executeRawUnsafe(
+      `DELETE FROM "CashoutFrpBonus" WHERE "tournamentInstanceId" = ${tournamentInstanceId}`
+    );
+
+    // 7. Unassign all teams + reset check-in
     await tx.team.updateMany({
       where: { tournamentInstanceId },
       data: {
@@ -723,7 +741,7 @@ export async function resetTournamentInstance(
       },
     });
 
-    // 7. Reset instance state
+    // 8. Reset instance state
     await tx.tournamentInstance.update({
       where: { id: tournamentInstanceId },
       data: {
@@ -805,6 +823,23 @@ export async function restartTournamentInstance(
     await tx.cashoutPlacement.deleteMany({
       where: { tournamentInstanceId },
     });
+
+    await tx.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS "CashoutFrpBonus" (
+        "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+        "tournamentInstanceId" INTEGER NOT NULL,
+        "cycleNumber" INTEGER NOT NULL,
+        "teamId" INTEGER NOT NULL,
+        "teamName" TEXT NOT NULL,
+        "frpAwarded" INTEGER NOT NULL DEFAULT 1,
+        "reason" TEXT NOT NULL DEFAULT 'CASHOUT_FIRST_PLACE',
+        "createdAt" DATETIME NOT NULL,
+        "updatedAt" DATETIME NOT NULL
+      )
+    `);
+    await tx.$executeRawUnsafe(
+      `DELETE FROM "CashoutFrpBonus" WHERE "tournamentInstanceId" = ${tournamentInstanceId}`
+    );
 
     await tx.standing.deleteMany({
       where: { tournamentInstanceId },

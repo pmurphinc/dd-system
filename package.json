@@ -5,6 +5,7 @@
   "packageManager": "pnpm@10.0.0",
   "scripts": {
     "dev": "npm run prisma:generate && ts-node-dev --respawn --transpile-only apps/bot/index.ts",
+    "test": "node -r ts-node/register/transpile-only apps/bot/storage/standings.test.ts",
     "player:add:ospuze-gooner": "node -r ts-node/register/transpile-only apps/bot/scripts/addOspuzeGoonerToDatabase.ts",
     "prisma:generate": "prisma generate",
     "prisma:db:push": "prisma db push",
