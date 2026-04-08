@@ -10,7 +10,10 @@ function findRole(guild: Guild, name: string) {
 export async function resolveGuildConfig(guild: Guild) {
   let config = await getGuildConfig(guild.id);
 
-  const adminRole = findRole(guild, "Admin");
+  const adminRole =
+    findRole(guild, "Admin") ??
+    findRole(guild, "Admins") ??
+    findRole(guild, "Administrator");
   const founderRole = findRole(guild, "Founder");
 
   // If config is missing OR roles not set → auto-fill

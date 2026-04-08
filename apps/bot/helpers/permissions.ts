@@ -11,6 +11,12 @@ import { getTeamForUser, StoredTeam } from "../storage/teams";
 
 type ConfiguredRole = "admin" | "founder" | "teamLeader" | "player";
 
+// Founder is treated as a superset of admin access. These aliases are the
+// accepted human-managed Discord role names when a guild-specific role ID has
+// not been configured yet.
+const ADMIN_ROLE_NAME_ALIASES = ["Admin", "Admins", "Administrator"] as const;
+const FOUNDER_ROLE_NAME_ALIASES = ["Founder"] as const;
+
 interface ResolvedRoleIds {
   adminRoleIds: string[];
   founderRoleId: string | null;
@@ -104,7 +110,7 @@ function getEnvRoleId(name: string): string | null {
 }
 function findRoleIdByName(
   roles: GuildMemberRoleManager,
-  names: string[]
+  names: readonly string[]
 ): string | null {
   const loweredNames = names.map((name) => name.trim().toLowerCase());
 
@@ -124,12 +130,12 @@ async function ensureGuildRoleConfig(
   const adminRoleId =
     existingConfig?.adminRoleId ??
     getEnvRoleId("ADMIN_ROLE_ID") ??
-    findRoleIdByName(roles, ["Admin"]);
+    findRoleIdByName(roles, ADMIN_ROLE_NAME_ALIASES);
 
   const founderRoleId =
     existingConfig?.founderRoleId ??
     getEnvRoleId("FOUNDER_ROLE_ID") ??
-    findRoleIdByName(roles, ["Founder"]);
+    findRoleIdByName(roles, FOUNDER_ROLE_NAME_ALIASES);
 
   const teamLeaderRoleId =
     existingConfig?.teamLeaderRoleId ??
@@ -186,10 +192,10 @@ async function resolveMemberAccessFlags(
   const hasDiscordAdmin = roles.member.permissions.has(
     PermissionFlagsBits.Administrator
   );
-  const hasNamedAdminRole = Boolean(
-    findRoleIdByName(roles, ["Admin", "Admins", "Administrator"])
+  const hasNamedAdminRole = Boolean(findRoleIdByName(roles, ADMIN_ROLE_NAME_ALIASES));
+  const hasNamedFounderRole = Boolean(
+    findRoleIdByName(roles, FOUNDER_ROLE_NAME_ALIASES)
   );
-  const hasNamedFounderRole = Boolean(findRoleIdByName(roles, ["Founder"]));
   const hasNamedTeamLeaderRole = Boolean(
     findRoleIdByName(roles, ["Team Leader", "TeamLeader"])
   );
@@ -219,6 +225,8 @@ function hasAnyAllowedRole(
 ): boolean {
   return allowedRoles.some((role) => {
     if (role === "admin") {
+      // Founder-only controls stay explicit, but any admin-gated flow also
+      // admits Founder so tournament operations do not diverge by entry point.
       return memberAccess.isAdmin || memberAccess.isFounder;
     }
 

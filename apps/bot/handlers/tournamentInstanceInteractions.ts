@@ -1014,6 +1014,14 @@ export async function handleTournamentInstanceButton(
       return true;
     }
 
+    if (!(await hasAdminInteractionAccess(interaction))) {
+      await interaction.reply({
+        content: "You do not have permission to use this action.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return true;
+    }
+
     const picker = await buildTournamentInstancePicker(interaction.guildId);
     await interaction.reply({
       ...picker,
@@ -1282,6 +1290,8 @@ export async function handleTournamentInstanceButton(
     return false;
   }
 
+  // Every tournament:* interaction route is expected to flow through the same
+  // shared admin helper so slash access and panel follow-ups stay aligned.
   if (!(await hasAdminInteractionAccess(interaction))) {
     await interaction.reply({
       content: "You do not have permission to use this action.",
