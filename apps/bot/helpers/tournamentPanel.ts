@@ -271,9 +271,6 @@ export async function buildTournamentPanel(
 
   const embed = new EmbedBuilder()
     .setTitle(`Tournament Panel: ${getTournamentInstanceLabel(instance)}`)
-    .setDescription(
-      "Instance-scoped control panel for a 4-team tournament. 1st place in Cashout awards +1 FRP."
-    )
     .addFields(
       { name: "Status", value: formatEnumLabel(instance.status), inline: true },
       { name: "Current Cycle", value: `${instance.currentCycle ?? "-"}`, inline: true },
