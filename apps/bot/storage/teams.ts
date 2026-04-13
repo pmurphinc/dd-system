@@ -7,6 +7,7 @@ import {
   StoredRegistrationSubmission,
 } from "./registrations";
 import { createAuditLog } from "./auditLog";
+import { notifyPanelDataChanged } from "../services/panelRefreshBus";
 import { deleteSourceRowFromGoogleSheet } from "../services/googleSheetsAdmin";
 
 export interface StoredTeamMember {
@@ -324,6 +325,13 @@ export async function importApprovedRegistrationToTeam(
     summary: `Imported ${team.teamName} into the live team table.`,
     details: `Submission ${submission.id}.${submission.discordCommunity ? ` Community: ${submission.discordCommunity}.` : ""}`,
     actorDiscordUserId,
+  });
+
+  notifyPanelDataChanged({
+    reason: "team_imported",
+    tournamentInstanceId: team.tournamentInstanceId ?? undefined,
+    teamId: team.id,
+    panelTypes: ["admin", "tournament", "team"],
   });
 
   return mapTeam(team);
@@ -683,6 +691,13 @@ export async function assignTeamToTournamentInstance(
     actorDiscordUserId,
   });
 
+  notifyPanelDataChanged({
+    reason: "team_assignment_changed",
+    tournamentInstanceId: updated.tournamentInstanceId ?? tournamentInstanceId ?? undefined,
+    teamId: updated.id,
+    panelTypes: ["admin", "tournament", "team"],
+  });
+
   return mapTeam(updated);
 }
 
@@ -760,6 +775,13 @@ export async function deleteImportedTeam(
     actorDiscordUserId,
   });
 
+  notifyPanelDataChanged({
+    reason: "team_deleted",
+    tournamentInstanceId: team.tournamentInstanceId ?? undefined,
+    teamId: team.id,
+    panelTypes: ["admin", "tournament", "team"],
+  });
+
   return {
     teamName: team.teamName,
     sheetDeleteAttempted: canDeleteSheetRow,
@@ -796,6 +818,13 @@ export async function setTeamCheckInStatus(
     actorDiscordUserId,
   });
 
+  notifyPanelDataChanged({
+    reason: "team_checkin_status_changed",
+    tournamentInstanceId: updated.tournamentInstanceId ?? undefined,
+    teamId: updated.id,
+    panelTypes: ["admin", "tournament", "team"],
+  });
+
   return mapTeam(updated);
 }
 
@@ -827,6 +856,13 @@ export async function updateTeamDiscordAssets(
     summary: `Updated Discord assets for ${updated.teamName}.`,
     details: `Role ${roleId ?? "none"}, voice ${voiceChannelId ?? "none"}.`,
     actorDiscordUserId,
+  });
+
+  notifyPanelDataChanged({
+    reason: "team_metadata_updated",
+    tournamentInstanceId: updated.tournamentInstanceId ?? undefined,
+    teamId: updated.id,
+    panelTypes: ["admin", "team"],
   });
 
   return mapTeam(updated);

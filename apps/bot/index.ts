@@ -1,5 +1,6 @@
 import "dotenv/config";
 import { Client, GatewayIntentBits, REST, Routes } from "discord.js";
+import { initializePanelAutoUpdateService, unregisterPanelMessage } from "./services/panelAutoUpdateService";
 
 const token = process.env.DISCORD_BOT_TOKEN;
 const clientId = process.env.DISCORD_CLIENT_ID;
@@ -80,10 +81,18 @@ async function registerCommands() {
   }
 }
 
+initializePanelAutoUpdateService(client);
+
 client.once("ready", async () => {
   console.log(`Bot is online as ${client.user?.tag}`);
   await registerCommands();
   startRegistrationSheetSyncPolling(client);
+});
+
+
+client.on("messageDelete", async (message) => {
+  if (!message.guildId) return;
+  unregisterPanelMessage(message.channelId, message.id);
 });
 
 client.on("interactionCreate", async (interaction) => {

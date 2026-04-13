@@ -6,6 +6,7 @@ import {
   recomputeStandingsForTournamentInstance,
 } from "./standings";
 import { pushTournamentWebhookUpdate } from "../services/tournamentWebhook";
+import { notifyPanelDataChanged } from "../services/panelRefreshBus";
 
 export interface OfficialMatchResultInput {
   tournamentInstanceId: number;
@@ -181,6 +182,12 @@ export async function recordOfficialMatchResult(
     reason: "official_result_recorded",
   });
 
+  notifyPanelDataChanged({
+    reason: "official_result_recorded",
+    tournamentInstanceId: input.tournamentInstanceId,
+    panelTypes: ["admin", "tournament", "team"],
+  });
+
   return result;
 }
 
@@ -237,6 +244,12 @@ export async function voidOfficialMatchResult(
   await pushTournamentWebhookUpdate({
     tournamentInstanceId: existing.tournamentInstanceId,
     reason: "official_result_voided",
+  });
+
+  notifyPanelDataChanged({
+    reason: "official_result_voided",
+    tournamentInstanceId: existing.tournamentInstanceId,
+    panelTypes: ["admin", "tournament", "team"],
   });
 
   return updated;

@@ -10,6 +10,7 @@ import {
   assignTeamToTournamentInstance,
 } from "./teams";
 import { pushTournamentWebhookUpdate } from "../services/tournamentWebhook";
+import { notifyPanelDataChanged } from "../services/panelRefreshBus";
 import { ensureStageMapAssigned, normalizeMapBan } from "./tournamentMaps";
 
 export interface StoredTournamentInstance {
@@ -138,6 +139,27 @@ export async function updateTournamentInstanceMetadata(
     actorDiscordUserId,
   });
 
+  notifyPanelDataChanged({
+    reason: "tournament_instance_updated",
+    guildId: updated.guildId,
+    tournamentInstanceId: updated.id,
+    panelTypes: ["admin", "tournament", "team"],
+  });
+
+  notifyPanelDataChanged({
+    reason: "tournament_metadata_updated",
+    guildId: updated.guildId,
+    tournamentInstanceId: updated.id,
+    panelTypes: ["admin", "tournament"],
+  });
+
+  notifyPanelDataChanged({
+    reason: "tournament_state_changed",
+    guildId: updated.guildId,
+    tournamentInstanceId: updated.id,
+    panelTypes: ["admin", "tournament", "team"],
+  });
+
   return normalizeInstance(updated);
 }
 
@@ -183,6 +205,13 @@ export async function createEmptyTournamentInstance(
     actorDiscordUserId,
   });
 
+  notifyPanelDataChanged({
+    reason: "tournament_instance_created",
+    guildId: created.guildId,
+    tournamentInstanceId: created.id,
+    panelTypes: ["admin", "tournament"],
+  });
+
   return normalizeInstance(created);
 }
 
@@ -214,6 +243,13 @@ export async function deleteEmptyTournamentInstance(
     entityId: `${tournamentInstanceId}`,
     summary: `Deleted empty tournament instance ${getInstanceAuditLabel(instance)}.`,
     actorDiscordUserId,
+  });
+
+  notifyPanelDataChanged({
+    reason: "tournament_instance_deleted",
+    guildId: instance.guildId,
+    tournamentInstanceId,
+    panelTypes: ["admin", "tournament"],
   });
 }
 
@@ -261,6 +297,13 @@ export async function openTournamentCheckIn(
     reason: "checkin_opened",
   });
 
+  notifyPanelDataChanged({
+    reason: "tournament_state_changed",
+    guildId: instance.guildId,
+    tournamentInstanceId: instance.id,
+    panelTypes: ["admin", "tournament", "team"],
+  });
+
   return normalizeInstance(instance);
 }
 
@@ -289,6 +332,13 @@ export async function closeTournamentCheckIn(
   await pushTournamentWebhookUpdate({
     tournamentInstanceId,
     reason: "checkin_closed",
+  });
+
+  notifyPanelDataChanged({
+    reason: "tournament_state_changed",
+    guildId: instance.guildId,
+    tournamentInstanceId: instance.id,
+    panelTypes: ["admin", "tournament", "team"],
   });
 
   return normalizeInstance(instance);
@@ -363,6 +413,13 @@ export async function handleTournamentLeaderCheckIn(
   await pushTournamentWebhookUpdate({
     tournamentInstanceId,
     reason: "leader_checked_in",
+  });
+
+  notifyPanelDataChanged({
+    reason: "tournament_state_changed",
+    guildId: updated.guildId,
+    tournamentInstanceId: updated.id,
+    panelTypes: ["admin", "tournament", "team"],
   });
 
   return normalizeInstance(updated);
@@ -470,6 +527,13 @@ export async function startTournamentCycle(
     reason: `cycle_${cycleNumber}_started`,
   });
 
+  notifyPanelDataChanged({
+    reason: "tournament_state_changed",
+    guildId: updated.guildId,
+    tournamentInstanceId: updated.id,
+    panelTypes: ["admin", "tournament", "team"],
+  });
+
   return normalizeInstance(updated);
 }
 
@@ -500,6 +564,13 @@ export async function setTournamentInstanceFinalRoundReady(
   await pushTournamentWebhookUpdate({
     tournamentInstanceId,
     reason: `cycle_${cycleNumber}_final_round_ready`,
+  });
+
+  notifyPanelDataChanged({
+    reason: "tournament_state_changed",
+    guildId: instance.guildId,
+    tournamentInstanceId: instance.id,
+    panelTypes: ["admin", "tournament", "team"],
   });
 
   return normalizeInstance(instance);
@@ -562,6 +633,13 @@ export async function finalizeTournamentCycle(
   await pushTournamentWebhookUpdate({
     tournamentInstanceId,
     reason: "cycle_finalized",
+  });
+
+  notifyPanelDataChanged({
+    reason: "tournament_state_changed",
+    guildId: updated.guildId,
+    tournamentInstanceId: updated.id,
+    panelTypes: ["admin", "tournament", "team"],
   });
 
   return normalizeInstance(updated);
@@ -633,6 +711,13 @@ export async function finishTournamentInstance(
         : "tournament_completed",
   });
 
+  notifyPanelDataChanged({
+    reason: "tournament_state_changed",
+    guildId: updated.guildId,
+    tournamentInstanceId: updated.id,
+    panelTypes: ["admin", "tournament", "team"],
+  });
+
   return normalizeInstance(updated);
 }
 
@@ -670,6 +755,13 @@ export async function reopenTournamentCycle(
   await pushTournamentWebhookUpdate({
     tournamentInstanceId,
     reason: `cycle_${cycleNumber}_reopened`,
+  });
+
+  notifyPanelDataChanged({
+    reason: "tournament_state_changed",
+    guildId: updated.guildId,
+    tournamentInstanceId: updated.id,
+    panelTypes: ["admin", "tournament", "team"],
   });
 
   return normalizeInstance(updated);

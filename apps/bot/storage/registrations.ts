@@ -1,5 +1,6 @@
 import { prisma } from "./prisma";
 import { createAuditLog } from "./auditLog";
+import { notifyPanelDataChanged } from "../services/panelRefreshBus";
 
 export type RegistrationStatus = "pending" | "approved" | "rejected";
 
@@ -699,6 +700,11 @@ export async function updateRegistrationStatus(
     summary: `${updated.teamName} marked ${status}.`,
     details: `${reviewerNotes || "No reviewer notes."}${updated.discordCommunity ? ` Community: ${updated.discordCommunity}.` : ""}`,
     actorDiscordUserId,
+  });
+
+  notifyPanelDataChanged({
+    reason: "registration_status_updated",
+    panelTypes: ["admin", "tournament"],
   });
 
   return mapSubmission(updated);
