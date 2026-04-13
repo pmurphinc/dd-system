@@ -72,6 +72,12 @@ function buildPoolExcludingBans(bans: Array<string | null | undefined>): string[
   return OFFICIAL_MAP_POOL.filter((map) => !uniqueBans.has(normalizeMapKey(map)));
 }
 
+export function pickScrimMap(bans: Array<string | null | undefined>): string {
+  const legalMaps = buildPoolExcludingBans(bans);
+  const pool = legalMaps.length > 0 ? legalMaps : [...OFFICIAL_MAP_POOL];
+  return pickRandomMap(pool);
+}
+
 let mapColumnsReady: Promise<void> | undefined;
 
 async function ensureMapColumns(): Promise<void> {

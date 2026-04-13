@@ -43,6 +43,7 @@ import { reportsCommand } from "./commands/reports";
 import { standingsCommand } from "./commands/standings";
 import { cycleresultsCommand } from "./commands/cycleresults";
 import { syncstatusCommand } from "./commands/syncstatus";
+import { scrimCommand } from "./commands/scrim";
 import { handleButtonInteraction } from "./handlers/buttonHandler";
 import { handleCommandInteraction } from "./handlers/commandHandler";
 import { handleModalInteraction } from "./handlers/modalHandler";
@@ -64,6 +65,7 @@ const commandList = [
   standingsCommand,
   cycleresultsCommand,
   syncstatusCommand,
+  scrimCommand,
 ];
 
 const commands = commandList.map((cmd) => cmd.data.toJSON());
