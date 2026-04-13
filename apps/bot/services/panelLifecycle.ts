@@ -179,10 +179,10 @@ export async function replaceOrEditPanelFromCommand(params: {
           scopeKey,
           ...metadata,
         });
-        await interaction.reply({
-          content: "Reopened your existing panel.",
-          ephemeral: true,
-        });
+        if (!interaction.deferred && !interaction.replied) {
+          await interaction.deferReply({ ephemeral: true });
+          await interaction.deleteReply().catch(() => undefined);
+        }
         return edited;
       }
     } catch (error) {
@@ -279,7 +279,7 @@ export async function replaceOrEditPanelByScopeFromSelector(params: {
       ...metadata,
     });
     if (!interaction.deferred && !interaction.replied) {
-      await interaction.reply({ content: "Updated your active panel.", ephemeral: true });
+      await interaction.deferUpdate();
     }
     return existing.message;
   }
@@ -310,7 +310,7 @@ export async function replaceOrEditPanelByScopeFromSelector(params: {
     replacementMessageId: posted.id,
   });
   if (!interaction.deferred && !interaction.replied) {
-    await interaction.reply({ content: "Opened panel in this channel.", ephemeral: true });
+    await interaction.deferUpdate();
   }
   return posted;
 }
