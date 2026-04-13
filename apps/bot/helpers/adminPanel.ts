@@ -32,7 +32,10 @@ function formatEditLockLabel(isLocked: boolean): string {
   return isLocked ? "Locked" : "Editable";
 }
 
-export async function buildAdminInstancePicker(guildId: string) {
+export async function buildAdminInstancePicker(
+  guildId: string,
+  customId = "admin:select_instance"
+) {
   const instances = await syncTournamentInstancesForGuild(guildId);
 
   if (instances.length === 0) {
@@ -43,7 +46,7 @@ export async function buildAdminInstancePicker(guildId: string) {
   }
 
   const menu = new StringSelectMenuBuilder()
-    .setCustomId("admin:select_instance")
+    .setCustomId(customId)
     .setPlaceholder("Select a tournament instance")
     .addOptions(
       instances.map((instance) => ({

@@ -4,8 +4,11 @@ import {
 } from "discord.js";
 import { BotCommand } from "./types";
 import { buildTeamPanel } from "../helpers/teamPanel";
-import { registerPanelMessage } from "../services/panelAutoUpdateService";
 import { getTeamForUser } from "../storage/teams";
+import {
+  buildPanelScopeKey,
+  replaceOrEditPanelFromCommand,
+} from "../services/panelLifecycle";
 
 export const teamCommand: BotCommand = {
   data: new SlashCommandBuilder()
@@ -27,19 +30,22 @@ export const teamCommand: BotCommand = {
       interaction.inCachedGuild() ? interaction.member.roles : undefined
     );
 
-    await interaction.reply(teamPanel);
-    const message = await interaction.fetchReply();
+    const scopeKey = buildPanelScopeKey("team", interaction.guildId, interaction.user.id);
     const team = await getTeamForUser(
       interaction.user.id,
       interaction.inCachedGuild() ? interaction.member.roles : undefined
     );
-
-    registerPanelMessage(message, {
+    await replaceOrEditPanelFromCommand({
+      interaction,
+      scopeKey,
       panelType: "team",
-      guildId: interaction.guildId,
-      userId: interaction.user.id,
-      teamId: team?.id,
-      tournamentInstanceId: team?.tournamentInstanceId ?? undefined,
+      panel: teamPanel,
+      metadata: {
+        ownerDiscordUserId: interaction.user.id,
+        actorDiscordUserId: interaction.user.id,
+        teamId: team?.id,
+        tournamentInstanceId: team?.tournamentInstanceId ?? undefined,
+      },
     });
   },
 };

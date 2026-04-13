@@ -12,7 +12,7 @@ import {
   TextInputBuilder,
   TextInputStyle,
 } from "discord.js";
-import { TournamentStage } from "@prisma/client";
+import { SavedPanelType, TournamentStage } from "@prisma/client";
 import { buildTeamPanel } from "../helpers/teamPanel";
 import {
   getAvailableTeamPanelActions,
@@ -76,6 +76,14 @@ import {
   setTeamCheckInStatus,
 } from "../storage/teams";
 import { pushTournamentWebhookUpdate } from "../services/tournamentWebhook";
+import {
+  buildPanelScopeKey,
+  isStalePanelInteraction,
+  rejectStalePanelInteraction,
+  rememberPanelInstance,
+  replaceOrEditPanelByScopeFromSelector,
+  replaceOrEditPanelFromInteraction,
+} from "../services/panelLifecycle";
 
 type TeamButtonAction =
   | "checkin"
@@ -1013,6 +1021,15 @@ export async function handleTournamentInstanceButton(
     if (!interaction.inCachedGuild()) {
       return true;
     }
+    const tournamentScopeKey = buildPanelScopeKey(
+      "tournament",
+      interaction.guildId,
+      interaction.user.id
+    );
+    if (await isStalePanelInteraction(interaction, tournamentScopeKey)) {
+      await rejectStalePanelInteraction(interaction);
+      return true;
+    }
 
     if (!(await hasAdminInteractionAccess(interaction))) {
       await interaction.reply({
@@ -1022,12 +1039,35 @@ export async function handleTournamentInstanceButton(
       return true;
     }
 
-    const picker = await buildTournamentInstancePicker(interaction.guildId);
+    const picker = await buildTournamentInstancePicker(
+      interaction.guildId,
+      "tournament:select_instance"
+    );
     await interaction.reply({
       ...picker,
       flags: MessageFlags.Ephemeral,
     });
     return true;
+  }
+
+  if (interaction.customId.startsWith("tournament:") && interaction.guildId) {
+    const tournamentScopeKey = buildPanelScopeKey(
+      "tournament",
+      interaction.guildId,
+      interaction.user.id
+    );
+    if (await isStalePanelInteraction(interaction, tournamentScopeKey)) {
+      await rejectStalePanelInteraction(interaction);
+      return true;
+    }
+  }
+
+  if (interaction.customId.startsWith("team:") && interaction.guildId) {
+    const teamScopeKey = buildPanelScopeKey("team", interaction.guildId, interaction.user.id);
+    if (await isStalePanelInteraction(interaction, teamScopeKey)) {
+      await rejectStalePanelInteraction(interaction);
+      return true;
+    }
   }
 
   if (interaction.customId.startsWith("team:refresh:")) {
@@ -1059,9 +1099,17 @@ export async function handleTournamentInstanceButton(
       interaction.guildId,
       interaction.member.roles
     );
-    await interaction.reply({
-      ...panel,
-      flags: MessageFlags.Ephemeral,
+    await replaceOrEditPanelFromInteraction({
+      interaction,
+      scopeKey: buildPanelScopeKey("team", interaction.guildId, interaction.user.id),
+      panelType: "team",
+      panel,
+      metadata: {
+        ownerDiscordUserId: interaction.user.id,
+        actorDiscordUserId: interaction.user.id,
+        teamId: team.id,
+        tournamentInstanceId: team.tournamentInstanceId ?? undefined,
+      },
     });
     return true;
   }
@@ -1642,9 +1690,16 @@ export async function handleTournamentInstanceButton(
 
   if (action === "refresh") {
     const panel = await buildTournamentPanel(instanceId);
-    await interaction.reply({
-      ...panel,
-      flags: MessageFlags.Ephemeral,
+    await replaceOrEditPanelFromInteraction({
+      interaction,
+      scopeKey: buildPanelScopeKey("tournament", interaction.guildId ?? "", interaction.user.id),
+      panelType: "tournament",
+      panel,
+      metadata: {
+        ownerDiscordUserId: interaction.user.id,
+        actorDiscordUserId: interaction.user.id,
+        tournamentInstanceId: instanceId,
+      },
     });
     return true;
   }
@@ -1978,10 +2033,26 @@ export async function handleTournamentInstanceSelectMenu(
     }
 
     const instanceId = Number(interaction.values[0]);
+    if (!interaction.guildId) {
+      return true;
+    }
+    await rememberPanelInstance({
+      guildId: interaction.guildId,
+      discordUserId: interaction.user.id,
+      panelType: SavedPanelType.tournament,
+      tournamentInstanceId: instanceId,
+    });
     const panel = await buildTournamentPanel(instanceId);
-    await interaction.reply({
-      ...panel,
-      flags: MessageFlags.Ephemeral,
+    await replaceOrEditPanelByScopeFromSelector({
+      interaction,
+      scopeKey: buildPanelScopeKey("tournament", interaction.guildId, interaction.user.id),
+      panelType: "tournament",
+      panel,
+      metadata: {
+        ownerDiscordUserId: interaction.user.id,
+        actorDiscordUserId: interaction.user.id,
+        tournamentInstanceId: instanceId,
+      },
     });
     return true;
   }
