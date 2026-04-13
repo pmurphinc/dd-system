@@ -16,10 +16,15 @@ import { getReportSubmissionById } from "../storage/reportSubmissions";
 import { handleTournamentInstanceSelectMenu } from "./tournamentInstanceInteractions";
 import { handleFounderAdminSelectMenu } from "./founderAdminInteractions";
 import { handleTournamentLeaderCheckIn } from "../storage/tournamentInstances";
+import { handleScrimSelectInteraction } from "./scrimInteractions";
 
 export async function handleSelectMenuInteraction(
   interaction: StringSelectMenuInteraction
 ) {
+  if (await handleScrimSelectInteraction(interaction)) {
+    return;
+  }
+
   if (await handleFounderAdminSelectMenu(interaction)) {
     return;
   }

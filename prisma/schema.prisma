@@ -371,3 +371,65 @@ model SavedPanelContext {
 
   @@unique([guildId, discordUserId, panelType])
 }
+
+
+enum ScrimQueueStatus {
+  LOOKING
+  MATCHED
+  CANCELLED
+  EXPIRED
+}
+
+enum ScrimMatchStatus {
+  MATCHED
+  IN_LOBBY_SETUP
+  READY
+  ACTIVE
+  COMPLETED
+  CANCELLED
+}
+
+model ScrimQueueEntry {
+  id                       Int              @id @default(autoincrement())
+  guildId                  String
+  teamId                   Int
+  requestedByDiscordUserId String
+  status                   ScrimQueueStatus
+  expiresAt                DateTime
+  createdAt                DateTime
+  updatedAt                DateTime
+  matchedAt                DateTime?
+  cancelledAt              DateTime?
+  expiredAt                DateTime?
+}
+
+model ScrimMatch {
+  id                         Int              @id @default(autoincrement())
+  guildId                    String
+  map                        String?
+  teamAId                    Int
+  teamBId                    Int
+  status                     ScrimMatchStatus
+  teamAReadyAt               DateTime?
+  teamBReadyAt               DateTime?
+  lobbyCode                  String?
+  lobbyCodeSetByDiscordUserId String?
+  lobbyCodeSetAt             DateTime?
+  createdAt                  DateTime
+  updatedAt                  DateTime
+  startedAt                  DateTime?
+  completedAt                DateTime?
+  cancelledAt                DateTime?
+}
+
+model ScrimTeamState {
+  teamId            Int      @id
+  guildId           String
+  status            String
+  activeQueueEntryId Int?
+  activeMatchId     Int?
+  opponentTeamId    Int?
+  lastUpdatedAt     DateTime
+  createdAt         DateTime
+  updatedAt         DateTime
+}

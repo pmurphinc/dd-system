@@ -58,6 +58,7 @@ import { ensureDiscordTeamSetup } from "../services/discordTeamSetup";
 import { createAuditLog } from "../storage/auditLog";
 import { handleTournamentInstanceButton } from "./tournamentInstanceInteractions";
 import { handleFounderAdminButton } from "./founderAdminInteractions";
+import { handleScrimButtonInteraction } from "./scrimInteractions";
 import {
   buildPanelScopeKey,
   replaceOrEditPanelFromInteraction,
@@ -236,6 +237,10 @@ function buildAssignmentPicker(
 export async function handleButtonInteraction(
   interaction: ButtonInteraction
 ) {
+  if (await handleScrimButtonInteraction(interaction)) {
+    return;
+  }
+
   if (await handleFounderAdminButton(interaction)) {
     return;
   }

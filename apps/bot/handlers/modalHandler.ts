@@ -22,6 +22,7 @@ import { approveReportSubmission } from "../services/reportApproval";
 import { getPlacedTeams } from "../storage/teams";
 import { handleTournamentInstanceModal } from "./tournamentInstanceInteractions";
 import { handleFounderAdminModal } from "./founderAdminInteractions";
+import { handleScrimModalInteraction } from "./scrimInteractions";
 
 function normalizeDiscordUserId(input: string): string {
   return input.replace(/[<@!>]/g, "").trim();
@@ -96,6 +97,10 @@ function normalizeScore(score: string): string {
 export async function handleModalInteraction(
   interaction: ModalSubmitInteraction
 ) {
+  if (await handleScrimModalInteraction(interaction)) {
+    return;
+  }
+
   if (await handleFounderAdminModal(interaction)) {
     return;
   }

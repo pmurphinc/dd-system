@@ -59,6 +59,12 @@ export const slashCommandAccessPolicies: Record<string, CommandAccessPolicy> = {
     allowedRoles: ["player", "teamLeader"],
     requireLinkedTeam: true,
   },
+  scrim: {
+    requiresGuild: true,
+    allowedRoles: ["player", "teamLeader", "admin"],
+    requireLinkedTeam: true,
+    bypassTeamLinkForRoles: ["admin"],
+  },
   report: {
     requiresGuild: true,
     allowedRoles: ["teamLeader"],
