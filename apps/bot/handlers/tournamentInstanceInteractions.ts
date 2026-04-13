@@ -75,6 +75,11 @@ import {
   listImportedTeamsForTournamentInstance,
   setTeamCheckInStatus,
 } from "../storage/teams";
+import {
+  createAdminChildFlowContext,
+  deleteAdminChildFlowContext,
+  getAdminChildFlowContext,
+} from "../storage/adminFlowContext";
 import { pushTournamentWebhookUpdate } from "../services/tournamentWebhook";
 import {
   buildPanelScopeKey,
@@ -217,7 +222,13 @@ function truncateButtonLabel(label: string, maxLength = 80): string {
   return `${label.slice(0, maxLength - 1)}…`;
 }
 
-async function buildForceCheckInReply(instanceId: number) {
+async function buildForceCheckInReply(params: {
+  instanceId: number;
+  guildId: string;
+  actorDiscordUserId: string;
+  sourcePanelScopeKey: string;
+}) {
+  const { instanceId, guildId, actorDiscordUserId, sourcePanelScopeKey } = params;
   const teams = await listImportedTeamsForTournamentInstance(instanceId);
   const uncheckedTeams = teams.filter((team) => team.checkInStatus !== "Checked In");
 
@@ -225,10 +236,18 @@ async function buildForceCheckInReply(instanceId: number) {
     return null;
   }
 
+  const flow = createAdminChildFlowContext({
+    type: "force_checkin",
+    guildId,
+    actorDiscordUserId,
+    tournamentInstanceId: instanceId,
+    sourcePanelScopeKey,
+  });
+
   const rows = uncheckedTeams.map((team) =>
     new ActionRowBuilder<ButtonBuilder>().addComponents(
       new ButtonBuilder()
-        .setCustomId(`tournament:force_checkin_team:${instanceId}:${team.id}`)
+        .setCustomId(`tournament:force_checkin_flow:${flow.id}:${team.id}`)
         .setLabel(truncateButtonLabel(team.teamName))
         .setStyle(ButtonStyle.Primary)
     )
@@ -1050,7 +1069,11 @@ export async function handleTournamentInstanceButton(
     return true;
   }
 
-  if (interaction.customId.startsWith("tournament:") && interaction.guildId) {
+  if (
+    interaction.customId.startsWith("tournament:") &&
+    interaction.guildId &&
+    !interaction.message.flags.has(MessageFlags.Ephemeral)
+  ) {
     const tournamentScopeKey = buildPanelScopeKey(
       "tournament",
       interaction.guildId,
@@ -1348,12 +1371,11 @@ export async function handleTournamentInstanceButton(
     return true;
   }
 
-  if (interaction.customId.startsWith("tournament:force_checkin_team:")) {
-    const [, , instanceIdRaw, teamIdRaw] = interaction.customId.split(":");
-    const instanceId = parseFiniteNumber(instanceIdRaw);
+  if (interaction.customId.startsWith("tournament:force_checkin_flow:")) {
+    const [, , flowId, teamIdRaw] = interaction.customId.split(":");
     const teamId = parseFiniteNumber(teamIdRaw);
 
-    if (instanceId === null || teamId === null) {
+    if (!flowId || teamId === null) {
       await interaction.reply({
         content: "Invalid force check-in payload.",
         flags: MessageFlags.Ephemeral,
@@ -1361,6 +1383,27 @@ export async function handleTournamentInstanceButton(
       return true;
     }
 
+    const flow = getAdminChildFlowContext(flowId);
+    if (!flow || flow.type !== "force_checkin") {
+      await interaction.reply({
+        content: "This force check-in selection expired. Please reopen it from the panel.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return true;
+    }
+
+    if (
+      flow.guildId !== interaction.guildId ||
+      flow.actorDiscordUserId !== interaction.user.id
+    ) {
+      await interaction.reply({
+        content: "You cannot use this force check-in selection.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return true;
+    }
+
+    const instanceId = flow.tournamentInstanceId;
     const instance = await getTournamentInstanceById(instanceId);
     if (!instance) {
       await interaction.reply({
@@ -1396,6 +1439,7 @@ export async function handleTournamentInstanceButton(
       );
       await deferEphemeralResponse();
       await handleTournamentLeaderCheckIn(instanceId, teamId, interaction.user.id);
+      deleteAdminChildFlowContext(flowId);
       const panel = await buildTournamentPanel(instanceId);
       await interaction.editReply({
         content: "Team force checked in successfully.",
@@ -1779,7 +1823,23 @@ export async function handleTournamentInstanceButton(
 
   if (action === "force_checkin") {
     try {
-      const forceCheckInReply = await buildForceCheckInReply(instanceId);
+      if (!interaction.guildId) {
+        await interaction.reply({
+          content: "This action must be used inside the guild.",
+          flags: MessageFlags.Ephemeral,
+        });
+        return true;
+      }
+      const forceCheckInReply = await buildForceCheckInReply({
+        instanceId,
+        guildId: interaction.guildId,
+        actorDiscordUserId: interaction.user.id,
+        sourcePanelScopeKey: buildPanelScopeKey(
+          "tournament",
+          interaction.guildId,
+          interaction.user.id
+        ),
+      });
 
       if (!forceCheckInReply) {
         await interaction.reply({
