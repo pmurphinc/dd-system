@@ -46,6 +46,23 @@ function assertGeneratedClientSupportsRuntimeSchema(): void {
 
 assertGeneratedClientSupportsRuntimeSchema();
 
+function assertRequiredPrismaDelegates(): void {
+  const delegateNames = ["activePanelMessage", "savedPanelContext"] as const;
+  const missing = delegateNames.filter((delegateName) => !prisma[delegateName]);
+
+  if (missing.length > 0) {
+    throw new Error(
+      `Panel lifecycle models are not available on Prisma client. Run migrations and regenerate the Prisma client before starting the bot. Missing delegates: ${missing.join(
+        ", "
+      )}.`
+    );
+  }
+}
+
+export function validateBotPrismaClient(): void {
+  assertRequiredPrismaDelegates();
+}
+
 if (process.env.NODE_ENV !== "production") {
   globalForPrisma.prisma = prisma;
 }

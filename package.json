@@ -8,6 +8,9 @@
     "test": "node -r ts-node/register/transpile-only apps/bot/storage/standings.test.ts",
     "player:add:ospuze-gooner": "node -r ts-node/register/transpile-only apps/bot/scripts/addOspuzeGoonerToDatabase.ts",
     "prisma:generate": "prisma generate",
+    "prisma:migrate:dev": "prisma migrate dev",
+    "prisma:migrate:deploy": "prisma migrate deploy",
+    "prisma:setup": "npm run prisma:migrate:deploy && npm run prisma:generate",
     "prisma:db:push": "prisma db push",
     "postinstall": "npm run prisma:generate"
   },
