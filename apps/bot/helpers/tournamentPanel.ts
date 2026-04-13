@@ -44,7 +44,10 @@ function formatSubmissionStatus(status: string): string {
   return "rejected";
 }
 
-export async function buildTournamentInstancePicker(guildId: string) {
+export async function buildTournamentInstancePicker(
+  guildId: string,
+  customId = "tournament:select_instance"
+) {
   const instances = await syncTournamentInstancesForGuild(guildId);
 
   if (instances.length === 0) {
@@ -55,7 +58,7 @@ export async function buildTournamentInstancePicker(guildId: string) {
   }
 
   const select = new StringSelectMenuBuilder()
-    .setCustomId("tournament:select_instance")
+    .setCustomId(customId)
     .setPlaceholder("Select a tournament instance")
     .addOptions(
       instances.map((instance) => ({

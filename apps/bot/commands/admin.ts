@@ -1,7 +1,13 @@
 import { ChatInputCommandInteraction, SlashCommandBuilder } from "discord.js";
+import { SavedPanelType } from "@prisma/client";
 import { BotCommand } from "./types";
-import { buildAdminPanel } from "../helpers/adminPanel";
-import { registerPanelMessage } from "../services/panelAutoUpdateService";
+import { buildAdminInstancePicker, buildAdminPanel } from "../helpers/adminPanel";
+import {
+  buildPanelScopeKey,
+  rememberPanelInstance,
+  replaceOrEditPanelFromCommand,
+  resolvePanelInstanceOrPrompt,
+} from "../services/panelLifecycle";
 
 export const adminCommand: BotCommand = {
   data: new SlashCommandBuilder()
@@ -23,15 +29,44 @@ export const adminCommand: BotCommand = {
       return;
     }
 
-    const instanceId = interaction.options.getInteger("instance") ?? undefined;
-    const panel = await buildAdminPanel(interaction.guildId, instanceId);
-    await interaction.reply(panel);
-    const message = await interaction.fetchReply();
-    registerPanelMessage(message, {
-      panelType: "admin",
+    const scopeKey = buildPanelScopeKey("admin", interaction.guildId, interaction.user.id);
+    const selectedInstanceId = interaction.options.getInteger("instance");
+    const instanceId =
+      selectedInstanceId ??
+      (await resolvePanelInstanceOrPrompt({
+        guildId: interaction.guildId,
+        discordUserId: interaction.user.id,
+        panelType: SavedPanelType.admin,
+        canAccessInstance: async () => true,
+      }));
+
+    if (!instanceId) {
+      const picker = await buildAdminInstancePicker(interaction.guildId, "admin:select_instance");
+      await interaction.reply({
+        ...picker,
+        ephemeral: true,
+      });
+      return;
+    }
+
+    await rememberPanelInstance({
       guildId: interaction.guildId,
+      discordUserId: interaction.user.id,
+      panelType: SavedPanelType.admin,
       tournamentInstanceId: instanceId,
-      userId: interaction.user.id,
+    });
+
+    const panel = await buildAdminPanel(interaction.guildId, instanceId);
+    await replaceOrEditPanelFromCommand({
+      interaction,
+      scopeKey,
+      panelType: "admin",
+      panel,
+      metadata: {
+        ownerDiscordUserId: interaction.user.id,
+        actorDiscordUserId: interaction.user.id,
+        tournamentInstanceId: instanceId,
+      },
     });
   },
 };

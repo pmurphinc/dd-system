@@ -1,7 +1,13 @@
 import { ChatInputCommandInteraction, SlashCommandBuilder } from "discord.js";
+import { SavedPanelType } from "@prisma/client";
 import { BotCommand } from "./types";
 import { buildTournamentInstancePicker, buildTournamentPanel } from "../helpers/tournamentPanel";
-import { registerPanelMessage } from "../services/panelAutoUpdateService";
+import {
+  buildPanelScopeKey,
+  rememberPanelInstance,
+  replaceOrEditPanelFromCommand,
+  resolvePanelInstanceOrPrompt,
+} from "../services/panelLifecycle";
 
 export const tournamentCommand: BotCommand = {
   data: new SlashCommandBuilder()
@@ -23,10 +29,26 @@ export const tournamentCommand: BotCommand = {
       return;
     }
 
-    const instanceId = interaction.options.getInteger("instance");
+    const scopeKey = buildPanelScopeKey(
+      "tournament",
+      interaction.guildId,
+      interaction.user.id
+    );
+    const selectedInstanceId = interaction.options.getInteger("instance");
+    const instanceId =
+      selectedInstanceId ??
+      (await resolvePanelInstanceOrPrompt({
+        guildId: interaction.guildId,
+        discordUserId: interaction.user.id,
+        panelType: SavedPanelType.tournament,
+        canAccessInstance: async () => true,
+      }));
 
-    if (instanceId === null) {
-      const picker = await buildTournamentInstancePicker(interaction.guildId);
+    if (!instanceId) {
+      const picker = await buildTournamentInstancePicker(
+        interaction.guildId,
+        "tournament:select_instance"
+      );
 
       await interaction.reply({
         ...picker,
@@ -35,18 +57,27 @@ export const tournamentCommand: BotCommand = {
       return;
     }
 
+    await rememberPanelInstance({
+      guildId: interaction.guildId,
+      discordUserId: interaction.user.id,
+      panelType: SavedPanelType.tournament,
+      tournamentInstanceId: instanceId,
+    });
+
     const tournamentPanel = await buildTournamentPanel(
       instanceId,
       interaction.guildId
     );
-
-    await interaction.reply(tournamentPanel);
-    const message = await interaction.fetchReply();
-    registerPanelMessage(message, {
+    await replaceOrEditPanelFromCommand({
+      interaction,
+      scopeKey,
       panelType: "tournament",
-      guildId: interaction.guildId,
-      tournamentInstanceId: instanceId,
-      userId: interaction.user.id,
+      panel: tournamentPanel,
+      metadata: {
+        ownerDiscordUserId: interaction.user.id,
+        actorDiscordUserId: interaction.user.id,
+        tournamentInstanceId: instanceId,
+      },
     });
   },
 };

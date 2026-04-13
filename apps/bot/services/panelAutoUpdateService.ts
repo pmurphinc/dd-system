@@ -3,12 +3,14 @@ import { buildAdminPanel } from "../helpers/adminPanel";
 import { buildTeamPanel } from "../helpers/teamPanel";
 import { buildTournamentPanel } from "../helpers/tournamentPanel";
 import {
-  onPanelDataChanged,
-  PanelDataChangeEvent,
-  PanelType,
-} from "./panelRefreshBus";
+  findActivePanels,
+  registerActivePanelMessage,
+  removeActivePanelByMessage,
+} from "../storage/panelContext";
+import { onPanelDataChanged, PanelDataChangeEvent, PanelType } from "./panelRefreshBus";
 
 interface TrackedPanelMessage {
+  scopeKey: string;
   panelType: PanelType;
   guildId: string;
   channelId: string;
@@ -18,15 +20,10 @@ interface TrackedPanelMessage {
   tournamentInstanceId?: number;
 }
 
-const registry = new Map<string, TrackedPanelMessage>();
 let botClient: Client | null = null;
 let flushTimer: NodeJS.Timeout | null = null;
 const pendingEvents: PanelDataChangeEvent[] = [];
 const DEBOUNCE_MS = 750;
-
-function registryKey(channelId: string, messageId: string): string {
-  return `${channelId}:${messageId}`;
-}
 
 function isMessageMissingError(error: unknown): boolean {
   if (!(error instanceof Error)) {
@@ -47,16 +44,15 @@ function shouldRefresh(entry: TrackedPanelMessage, event: PanelDataChangeEvent):
     return false;
   }
 
-  if (event.tournamentInstanceId !== undefined) {
-    if (entry.tournamentInstanceId !== event.tournamentInstanceId) {
-      return false;
-    }
+  if (
+    event.tournamentInstanceId !== undefined &&
+    entry.tournamentInstanceId !== event.tournamentInstanceId
+  ) {
+    return false;
   }
 
-  if (event.teamId !== undefined && entry.panelType === "team") {
-    if (entry.teamId !== event.teamId) {
-      return false;
-    }
+  if (event.teamId !== undefined && entry.panelType === "team" && entry.teamId !== event.teamId) {
+    return false;
   }
 
   return true;
@@ -85,29 +81,52 @@ async function updateTrackedPanel(entry: TrackedPanelMessage): Promise<void> {
 
   try {
     const channel = await botClient.channels.fetch(entry.channelId);
-
     if (!channel || channel.type !== ChannelType.GuildText) {
-      registry.delete(registryKey(entry.channelId, entry.messageId));
+      await removeActivePanelByMessage(entry.channelId, entry.messageId);
       return;
     }
 
     const message = await channel.messages.fetch(entry.messageId);
     const nextPanel = await rebuildPanel(entry);
-    await message.edit(nextPanel);
+    try {
+      await message.edit(nextPanel);
+    } catch (error) {
+      if (isMessageMissingError(error)) {
+        const replacement = await channel.send(nextPanel);
+        await registerActivePanelMessage({
+          guildId: entry.guildId,
+          channelId: replacement.channelId,
+          messageId: replacement.id,
+          panelType: entry.panelType,
+          scopeKey: entry.scopeKey,
+          ownerDiscordUserId: entry.userId,
+          actorDiscordUserId: entry.userId,
+          tournamentInstanceId: entry.tournamentInstanceId,
+          teamId: entry.teamId,
+        });
+        await message.delete().catch(() => undefined);
+        console.debug("[panel-auto-update] panel replaced", {
+          panelType: entry.panelType,
+          scopeKey: entry.scopeKey,
+          oldMessageId: entry.messageId,
+          replacementMessageId: replacement.id,
+        });
+        return;
+      }
+      throw error;
+    }
+    console.debug("[panel-auto-update] panel edited in place", {
+      panelType: entry.panelType,
+      guildId: entry.guildId,
+      messageId: entry.messageId,
+    });
   } catch (error) {
     if (isMessageMissingError(error)) {
-      registry.delete(registryKey(entry.channelId, entry.messageId));
+      await removeActivePanelByMessage(entry.channelId, entry.messageId);
       return;
     }
 
-    console.error("[panel-auto-update] Failed to update panel", {
-      panelType: entry.panelType,
-      channelId: entry.channelId,
-      messageId: entry.messageId,
-      tournamentInstanceId: entry.tournamentInstanceId,
-      teamId: entry.teamId,
-      error,
-    });
+    console.error("[panel-auto-update] Failed to update panel", { entry, error });
   }
 }
 
@@ -118,28 +137,25 @@ async function flushPendingEvents() {
     return;
   }
 
-  const affected = new Map<string, TrackedPanelMessage>();
-  for (const entry of registry.values()) {
-    const matches = events.some((event) => shouldRefresh(entry, event));
-    if (matches) {
-      affected.set(registryKey(entry.channelId, entry.messageId), entry);
-    }
-  }
+  const records = await findActivePanels({});
+  const tracked: TrackedPanelMessage[] = records.map((record) => ({
+    scopeKey: record.scopeKey,
+    panelType: record.panelType as PanelType,
+    guildId: record.guildId,
+    channelId: record.channelId,
+    messageId: record.messageId,
+    userId: record.ownerDiscordUserId ?? undefined,
+    teamId: record.teamId ?? undefined,
+    tournamentInstanceId: record.tournamentInstanceId ?? undefined,
+  }));
+  const affected = tracked.filter((entry) => events.some((event) => shouldRefresh(entry, event)));
 
-  await Promise.all(
-    [...affected.values()].map(async (entry) => {
-      await updateTrackedPanel(entry);
-    })
-  );
+  await Promise.all(affected.map((entry) => updateTrackedPanel(entry)));
 }
 
 function queueRefresh(event: PanelDataChangeEvent): void {
   pendingEvents.push(event);
-
-  if (flushTimer) {
-    return;
-  }
-
+  if (flushTimer) return;
   flushTimer = setTimeout(() => {
     void flushPendingEvents();
   }, DEBOUNCE_MS);
@@ -148,6 +164,7 @@ function queueRefresh(event: PanelDataChangeEvent): void {
 export function initializePanelAutoUpdateService(client: Client): void {
   botClient = client;
   onPanelDataChanged((event) => {
+    console.debug("[panel-auto-update] cross-panel refresh triggered", event);
     queueRefresh(event);
   });
 }
@@ -156,13 +173,19 @@ export function registerPanelMessage(
   message: Message,
   metadata: Omit<TrackedPanelMessage, "channelId" | "messageId">
 ): void {
-  registry.set(registryKey(message.channelId, message.id), {
-    ...metadata,
+  void registerActivePanelMessage({
+    guildId: metadata.guildId,
     channelId: message.channelId,
     messageId: message.id,
+    panelType: metadata.panelType,
+    scopeKey: `${metadata.panelType}:${metadata.guildId}:${metadata.userId ?? "global"}`,
+    ownerDiscordUserId: metadata.userId,
+    actorDiscordUserId: metadata.userId,
+    tournamentInstanceId: metadata.tournamentInstanceId,
+    teamId: metadata.teamId,
   });
 }
 
 export function unregisterPanelMessage(channelId: string, messageId: string): void {
-  registry.delete(registryKey(channelId, messageId));
+  void removeActivePanelByMessage(channelId, messageId);
 }

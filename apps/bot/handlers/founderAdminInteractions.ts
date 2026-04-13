@@ -10,8 +10,17 @@ import {
   TextInputBuilder,
   TextInputStyle,
 } from "discord.js";
+import { SavedPanelType } from "@prisma/client";
 import { buildAdminInstancePicker, buildAdminPanel } from "../helpers/adminPanel";
 import { hasFounderInteractionAccess } from "../helpers/permissions";
+import {
+  buildPanelScopeKey,
+  isStalePanelInteraction,
+  rejectStalePanelInteraction,
+  rememberPanelInstance,
+  replaceOrEditPanelByScopeFromSelector,
+  replaceOrEditPanelFromInteraction,
+} from "../services/panelLifecycle";
 import {
   createEmptyTournamentInstance,
   deleteEmptyTournamentInstance,
@@ -54,17 +63,34 @@ export async function handleFounderAdminButton(
     if (!guildId) {
       return true;
     }
+    if (
+      await isStalePanelInteraction(
+        interaction,
+        buildPanelScopeKey("admin", guildId, interaction.user.id)
+      )
+    ) {
+      await rejectStalePanelInteraction(interaction);
+      return true;
+    }
 
-    const picker = await buildAdminInstancePicker(guildId);
-    await interaction.reply({
-      ...picker,
-      ephemeral: true,
-    });
+    const picker = await buildAdminInstancePicker(guildId, "admin:select_instance");
+    await interaction.reply({ ...picker, ephemeral: true });
     return true;
   }
 
   if (!interaction.customId.startsWith("admin:")) {
     return false;
+  }
+
+  if (
+    interaction.guildId &&
+    (await isStalePanelInteraction(
+      interaction,
+      buildPanelScopeKey("admin", interaction.guildId, interaction.user.id)
+    ))
+  ) {
+    await rejectStalePanelInteraction(interaction);
+    return true;
   }
 
   if (!(await hasFounderInteractionAccess(interaction))) {
@@ -89,9 +115,16 @@ export async function handleFounderAdminButton(
 
   if (action === "refresh") {
     const panel = await buildAdminPanel(guildId, instanceId);
-    await interaction.reply({
-      ...panel,
-      ephemeral: true,
+    await replaceOrEditPanelFromInteraction({
+      interaction,
+      scopeKey: buildPanelScopeKey("admin", guildId, interaction.user.id),
+      panelType: "admin",
+      panel,
+      metadata: {
+        ownerDiscordUserId: interaction.user.id,
+        actorDiscordUserId: interaction.user.id,
+        tournamentInstanceId: instanceId,
+      },
     });
     return true;
   }
@@ -419,10 +452,24 @@ export async function handleFounderAdminSelectMenu(
   }
 
   if (interaction.customId === "admin:select_instance") {
-    const panel = await buildAdminPanel(guildId, Number(interaction.values[0]));
-    await interaction.reply({
-      ...panel,
-      ephemeral: true,
+    const instanceId = Number(interaction.values[0]);
+    await rememberPanelInstance({
+      guildId,
+      discordUserId: interaction.user.id,
+      panelType: SavedPanelType.admin,
+      tournamentInstanceId: instanceId,
+    });
+    const panel = await buildAdminPanel(guildId, instanceId);
+    await replaceOrEditPanelByScopeFromSelector({
+      interaction,
+      scopeKey: buildPanelScopeKey("admin", guildId, interaction.user.id),
+      panelType: "admin",
+      panel,
+      metadata: {
+        ownerDiscordUserId: interaction.user.id,
+        actorDiscordUserId: interaction.user.id,
+        tournamentInstanceId: instanceId,
+      },
     });
     return true;
   }

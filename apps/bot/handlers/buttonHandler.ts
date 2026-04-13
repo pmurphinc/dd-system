@@ -58,6 +58,10 @@ import { ensureDiscordTeamSetup } from "../services/discordTeamSetup";
 import { createAuditLog } from "../storage/auditLog";
 import { handleTournamentInstanceButton } from "./tournamentInstanceInteractions";
 import { handleFounderAdminButton } from "./founderAdminInteractions";
+import {
+  buildPanelScopeKey,
+  replaceOrEditPanelFromInteraction,
+} from "../services/panelLifecycle";
 
 function parseIdSuffix(customId: string, prefix: string): number {
   return Number(customId.slice(prefix.length));
@@ -242,10 +246,19 @@ export async function handleButtonInteraction(
 
   if (interaction.customId === "tournament_refresh") {
     const tournamentPanel = await buildTournamentPanel();
-
-    await interaction.reply({
-      ...tournamentPanel,
-      ephemeral: true,
+    await replaceOrEditPanelFromInteraction({
+      interaction,
+      scopeKey: buildPanelScopeKey(
+        "tournament",
+        interaction.guildId ?? "",
+        interaction.user.id
+      ),
+      panelType: "tournament",
+      panel: tournamentPanel,
+      metadata: {
+        ownerDiscordUserId: interaction.user.id,
+        actorDiscordUserId: interaction.user.id,
+      },
     });
     return;
   }
@@ -257,9 +270,15 @@ export async function handleButtonInteraction(
       interaction.inCachedGuild() ? interaction.member.roles : undefined
     );
 
-    await interaction.reply({
-      ...teamPanel,
-      ephemeral: true,
+    await replaceOrEditPanelFromInteraction({
+      interaction,
+      scopeKey: buildPanelScopeKey("team", interaction.guildId ?? "", interaction.user.id),
+      panelType: "team",
+      panel: teamPanel,
+      metadata: {
+        ownerDiscordUserId: interaction.user.id,
+        actorDiscordUserId: interaction.user.id,
+      },
     });
     return;
   }

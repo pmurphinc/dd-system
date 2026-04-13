@@ -42,6 +42,11 @@ enum OfficialMatchResultStatus {
   voided
 }
 
+enum SavedPanelType {
+  tournament
+  admin
+}
+
 model TournamentState {
   id               Int    @id
   tournamentStatus String
@@ -331,4 +336,38 @@ model OfficialMatchResult {
   updatedAt            DateTime
   tournamentInstance   TournamentInstance @relation(fields: [tournamentInstanceId], references: [id], onDelete: Cascade)
   matchAssignment      MatchAssignment    @relation(fields: [matchAssignmentId], references: [id], onDelete: Cascade)
+}
+
+model ActivePanelMessage {
+  id                   Int      @id @default(autoincrement())
+  guildId              String
+  channelId            String
+  messageId            String
+  panelType            String
+  scopeKey             String   @unique
+  ownerDiscordUserId   String?
+  actorDiscordUserId   String?
+  tournamentInstanceId Int?
+  teamId               Int?
+  matchAssignmentId    Int?
+  invalidatedAt        DateTime?
+  createdAt            DateTime
+  updatedAt            DateTime
+
+  @@index([guildId, panelType])
+  @@index([ownerDiscordUserId, panelType])
+  @@index([tournamentInstanceId, panelType])
+  @@index([teamId, panelType])
+}
+
+model SavedPanelContext {
+  id                   Int            @id @default(autoincrement())
+  guildId              String
+  discordUserId        String
+  panelType            SavedPanelType
+  tournamentInstanceId Int
+  createdAt            DateTime
+  updatedAt            DateTime
+
+  @@unique([guildId, discordUserId, panelType])
 }
