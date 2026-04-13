@@ -1,7 +1,11 @@
 import "dotenv/config";
 import { Client, GatewayIntentBits, REST, Routes } from "discord.js";
 import { initializePanelAutoUpdateService, unregisterPanelMessage } from "./services/panelAutoUpdateService";
-import { validateBotPrismaClient } from "./storage/prisma";
+import {
+  logResolvedDatabaseTarget,
+  validateBotPrismaClient,
+  validatePanelLifecycleSchema,
+} from "./storage/prisma";
 
 const token = process.env.DISCORD_BOT_TOKEN;
 const clientId = process.env.DISCORD_CLIENT_ID;
@@ -12,6 +16,7 @@ if (!clientId) throw new Error("Missing DISCORD_CLIENT_ID");
 if (!guildId) throw new Error("Missing DISCORD_GUILD_ID");
 
 validateBotPrismaClient();
+logResolvedDatabaseTarget();
 
 const config = {
   token,
@@ -84,10 +89,21 @@ async function registerCommands() {
   }
 }
 
-initializePanelAutoUpdateService(client);
+async function initializePanelServices(): Promise<void> {
+  try {
+    await validatePanelLifecycleSchema();
+    initializePanelAutoUpdateService(client);
+  } catch (error) {
+    console.error(
+      "[startup] Panel lifecycle storage unavailable. Panel auto-update service will not start.",
+      error
+    );
+  }
+}
 
 client.once("ready", async () => {
   console.log(`Bot is online as ${client.user?.tag}`);
+  await initializePanelServices();
   await registerCommands();
   startRegistrationSheetSyncPolling(client);
 });

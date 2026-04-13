@@ -17,3 +17,9 @@ Before starting the bot on a fresh environment or after pulling schema changes:
 Or run both with:
 
 - `npm run prisma:setup`
+
+### Database path resolution
+
+- The bot and Prisma CLI now resolve SQLite `DATABASE_URL` values relative to the repository root.
+- If `DATABASE_URL` is unset, both use: `file:<repo-root>/dev.db`.
+- On startup the bot logs the resolved datasource path under `[db] Prisma datasource resolved` so you can confirm the exact file.

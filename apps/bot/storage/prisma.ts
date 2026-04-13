@@ -1,11 +1,12 @@
 import { PrismaBetterSqlite3 } from "@prisma/adapter-better-sqlite3";
 import { Prisma, PrismaClient } from "@prisma/client";
+import { describeSqliteDatabaseTarget, resolveDatabaseUrl } from "../../../prisma/databaseUrl";
 
 const globalForPrisma = globalThis as typeof globalThis & {
   prisma?: PrismaClient;
 };
 
-const databaseUrl = process.env.DATABASE_URL ?? "file:./dev.db";
+const databaseUrl = resolveDatabaseUrl();
 const adapter = new PrismaBetterSqlite3({
   url: databaseUrl,
 });
@@ -61,6 +62,37 @@ function assertRequiredPrismaDelegates(): void {
 
 export function validateBotPrismaClient(): void {
   assertRequiredPrismaDelegates();
+}
+
+export function logResolvedDatabaseTarget(): void {
+  const target = describeSqliteDatabaseTarget(databaseUrl);
+  console.info("[db] Prisma datasource resolved", {
+    databaseUrl: target.databaseUrl,
+    resolvedPath: target.resolvedPath,
+    cwd: process.cwd(),
+  });
+}
+
+async function assertPanelLifecycleTablesExist(): Promise<void> {
+  const tableNames = ["ActivePanelMessage", "SavedPanelContext"] as const;
+  const rows = (await prisma.$queryRawUnsafe<{ name: string }[]>(
+    `SELECT name FROM sqlite_master WHERE type='table' AND name IN (${tableNames
+      .map((name) => `'${name}'`)
+      .join(",")})`
+  )) as { name: string }[];
+  const existing = new Set(rows.map((row) => row.name));
+  const missing = tableNames.filter((tableName) => !existing.has(tableName));
+  if (missing.length > 0) {
+    throw new Error(
+      `Database schema is out of date: ActivePanelMessage/SavedPanelContext tables are missing. Run Prisma migration against the active bot database. Missing: ${missing.join(
+        ", "
+      )}.`
+    );
+  }
+}
+
+export async function validatePanelLifecycleSchema(): Promise<void> {
+  await assertPanelLifecycleTablesExist();
 }
 
 if (process.env.NODE_ENV !== "production") {
