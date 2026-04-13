@@ -1,4 +1,5 @@
 import { ChannelType, Client, Message } from "discord.js";
+import { deleteTrackedPanelMessage, invalidateOldScopeMessages } from "./panelLifecycle";
 import { buildAdminPanel } from "../helpers/adminPanel";
 import { buildTeamPanel } from "../helpers/teamPanel";
 import { buildTournamentPanel } from "../helpers/tournamentPanel";
@@ -87,39 +88,37 @@ async function updateTrackedPanel(entry: TrackedPanelMessage): Promise<void> {
       return;
     }
 
-    const message = await channel.messages.fetch(entry.messageId);
     const nextPanel = await rebuildPanel(entry);
-    try {
-      await message.edit(nextPanel);
-    } catch (error) {
-      if (isMessageMissingError(error)) {
-        const replacement = await channel.send(nextPanel);
-        await registerActivePanelMessage({
-          guildId: entry.guildId,
-          channelId: replacement.channelId,
-          messageId: replacement.id,
-          panelType: entry.panelType,
-          scopeKey: entry.scopeKey,
-          ownerDiscordUserId: entry.userId,
-          actorDiscordUserId: entry.userId,
-          tournamentInstanceId: entry.tournamentInstanceId,
-          teamId: entry.teamId,
-        });
-        await message.delete().catch(() => undefined);
-        console.debug("[panel-auto-update] panel replaced", {
-          panelType: entry.panelType,
-          scopeKey: entry.scopeKey,
-          oldMessageId: entry.messageId,
-          replacementMessageId: replacement.id,
-        });
-        return;
-      }
-      throw error;
-    }
-    console.debug("[panel-auto-update] panel edited in place", {
-      panelType: entry.panelType,
+    const replacement = await channel.send(nextPanel);
+    await registerActivePanelMessage({
       guildId: entry.guildId,
+      channelId: replacement.channelId,
+      messageId: replacement.id,
+      panelType: entry.panelType,
+      scopeKey: entry.scopeKey,
+      ownerDiscordUserId: entry.userId,
+      actorDiscordUserId: entry.userId,
+      tournamentInstanceId: entry.tournamentInstanceId,
+      teamId: entry.teamId,
+    });
+
+    await deleteTrackedPanelMessage({
+      client: botClient,
+      channelId: entry.channelId,
       messageId: entry.messageId,
+      scopeKey: entry.scopeKey,
+    });
+    await invalidateOldScopeMessages({
+      client: botClient,
+      scopeKey: entry.scopeKey,
+      keepMessageId: replacement.id,
+    });
+
+    console.debug("[panel-auto-update] panel reposted", {
+      panelType: entry.panelType,
+      scopeKey: entry.scopeKey,
+      oldMessageId: entry.messageId,
+      replacementMessageId: replacement.id,
     });
   } catch (error) {
     if (isMessageMissingError(error)) {
