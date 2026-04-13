@@ -1,6 +1,7 @@
 import { ChatInputCommandInteraction, SlashCommandBuilder } from "discord.js";
 import { BotCommand } from "./types";
 import { buildAdminPanel } from "../helpers/adminPanel";
+import { registerPanelMessage } from "../services/panelAutoUpdateService";
 
 export const adminCommand: BotCommand = {
   data: new SlashCommandBuilder()
@@ -24,9 +25,13 @@ export const adminCommand: BotCommand = {
 
     const instanceId = interaction.options.getInteger("instance") ?? undefined;
     const panel = await buildAdminPanel(interaction.guildId, instanceId);
-    await interaction.reply({
-      ...panel,
-      ephemeral: true,
+    await interaction.reply(panel);
+    const message = await interaction.fetchReply();
+    registerPanelMessage(message, {
+      panelType: "admin",
+      guildId: interaction.guildId,
+      tournamentInstanceId: instanceId,
+      userId: interaction.user.id,
     });
   },
 };

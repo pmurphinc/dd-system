@@ -1,6 +1,7 @@
 import { ChatInputCommandInteraction, SlashCommandBuilder } from "discord.js";
 import { BotCommand } from "./types";
 import { buildTournamentInstancePicker, buildTournamentPanel } from "../helpers/tournamentPanel";
+import { registerPanelMessage } from "../services/panelAutoUpdateService";
 
 export const tournamentCommand: BotCommand = {
   data: new SlashCommandBuilder()
@@ -39,9 +40,13 @@ export const tournamentCommand: BotCommand = {
       interaction.guildId
     );
 
-    await interaction.reply({
-      ...tournamentPanel,
-      ephemeral: true,
+    await interaction.reply(tournamentPanel);
+    const message = await interaction.fetchReply();
+    registerPanelMessage(message, {
+      panelType: "tournament",
+      guildId: interaction.guildId,
+      tournamentInstanceId: instanceId,
+      userId: interaction.user.id,
     });
   },
 };

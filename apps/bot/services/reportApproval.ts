@@ -3,6 +3,7 @@ import {
   getReportSubmissionById,
   StoredReportSubmission,
 } from "../storage/reportSubmissions";
+import { notifyPanelDataChanged } from "./panelRefreshBus";
 
 export interface ReportApprovalResult {
   approvedReportId: number;
@@ -31,9 +32,16 @@ export async function approveReportSubmission(
     };
   }
 
-  await prisma.reportSubmission.update({
+  const approved = await prisma.reportSubmission.update({
     where: { id: currentReportSubmission.id },
     data: { status: "reviewed" },
+  });
+
+  notifyPanelDataChanged({
+    reason: "score_submission_approved",
+    tournamentInstanceId: approved.tournamentInstanceId ?? undefined,
+    teamId: approved.teamId ?? undefined,
+    panelTypes: ["admin", "tournament", "team"],
   });
 
   return {
