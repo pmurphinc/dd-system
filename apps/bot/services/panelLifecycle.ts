@@ -3,10 +3,8 @@ import {
   ChatInputCommandInteraction,
   Client,
   InteractionReplyOptions,
-  InteractionUpdateOptions,
   Message,
   MessageCreateOptions,
-  MessageEditOptions,
   StringSelectMenuInteraction,
 } from "discord.js";
 import { SavedPanelType } from "@prisma/client";
@@ -22,6 +20,7 @@ import {
 import { getTournamentInstanceById } from "../storage/tournamentInstances";
 
 type InteractionWithMessage = ButtonInteraction | StringSelectMenuInteraction;
+type QuietlyAckInteraction = InteractionWithMessage | ChatInputCommandInteraction;
 
 export const STALE_PANEL_MESSAGE = "That panel is outdated. Please use the newest panel.";
 
@@ -32,6 +31,15 @@ function isMessageMissingError(error: unknown): boolean {
       error.message
     )
   );
+}
+
+function toMessageCreateOptions(panel: InteractionReplyOptions): MessageCreateOptions {
+  const sendablePanel: MessageCreateOptions = {
+    ...(panel as unknown as MessageCreateOptions),
+  };
+  delete (sendablePanel as Record<string, unknown>).ephemeral;
+  delete (sendablePanel as Record<string, unknown>).flags;
+  return sendablePanel;
 }
 
 export function buildPanelScopeKey(
@@ -65,63 +73,52 @@ export async function rejectStalePanelInteraction(
   await interaction.reply({ content: STALE_PANEL_MESSAGE, ephemeral: true });
 }
 
-async function editExistingPanel(
-  client: Client,
-  channelId: string,
-  messageId: string,
-  panel: InteractionReplyOptions
-) {
-  const channel = await client.channels.fetch(channelId);
-  if (!channel || !channel.isTextBased()) {
-    return null;
+export async function acknowledgeInteractionQuietly(
+  interaction: QuietlyAckInteraction
+): Promise<void> {
+  if (interaction.deferred || interaction.replied) {
+    return;
   }
 
-  const message = await channel.messages.fetch(messageId);
-  await message.edit(panel as MessageEditOptions);
-  return message;
+  if (interaction.isChatInputCommand()) {
+    await interaction.deferReply({ ephemeral: true });
+    return;
+  }
+
+  await interaction.deferUpdate();
 }
 
-async function cleanupActiveScopeRecord(client: Client, scopeKey: string) {
-  const active = await getActivePanelMessage(scopeKey);
-  if (!active || active.invalidatedAt) {
-    return null;
-  }
-
+export async function deleteTrackedPanelMessage(params: {
+  client: Client;
+  channelId: string;
+  messageId: string;
+  scopeKey: string;
+}): Promise<void> {
+  const { client, channelId, messageId, scopeKey } = params;
   try {
-    const channel = await client.channels.fetch(active.channelId);
+    const channel = await client.channels.fetch(channelId);
     if (!channel || !channel.isTextBased()) {
-      await removeActivePanelByMessage(active.channelId, active.messageId);
-      console.debug("[panel-lifecycle] old tracked message missing and record invalidated", {
-        scopeKey,
-        channelId: active.channelId,
-        messageId: active.messageId,
-      });
-      return null;
+      await removeActivePanelByMessage(channelId, messageId);
+      return;
     }
 
-    const message = await channel.messages.fetch(active.messageId);
-    if (message.author.id !== client.user?.id) {
-      await removeActivePanelByMessage(active.channelId, active.messageId);
-      console.debug("[panel-lifecycle] old tracked message not editable and record invalidated", {
-        scopeKey,
-        channelId: active.channelId,
-        messageId: active.messageId,
-      });
-      return null;
-    }
-
-    return { active, message };
+    const message = await channel.messages.fetch(messageId);
+    await message.delete().catch((error) => {
+      if (!isMessageMissingError(error)) {
+        throw error;
+      }
+    });
   } catch (error) {
-    if (isMessageMissingError(error)) {
-      await removeActivePanelByMessage(active.channelId, active.messageId);
-      console.debug("[panel-lifecycle] old tracked message missing and record invalidated", {
+    if (!isMessageMissingError(error)) {
+      console.debug("[panel-lifecycle] tracked message delete failed softly", {
         scopeKey,
-        channelId: active.channelId,
-        messageId: active.messageId,
+        channelId,
+        messageId,
+        error,
       });
-      return null;
     }
-    throw error;
+  } finally {
+    await removeActivePanelByMessage(channelId, messageId);
   }
 }
 
@@ -144,8 +141,31 @@ export async function cleanupDuplicateActiveScopeRecords(scopeKey: string) {
   });
 }
 
-export async function replaceOrEditPanelFromCommand(params: {
-  interaction: ChatInputCommandInteraction;
+export async function invalidateOldScopeMessages(params: {
+  client: Client;
+  scopeKey: string;
+  keepMessageId?: string;
+}): Promise<void> {
+  const { client, scopeKey, keepMessageId } = params;
+  const records = await findActivePanels({});
+  const stale = records.filter(
+    (record) => record.scopeKey === scopeKey && record.messageId !== keepMessageId
+  );
+
+  for (const record of stale) {
+    await deleteTrackedPanelMessage({
+      client,
+      channelId: record.channelId,
+      messageId: record.messageId,
+      scopeKey,
+    });
+  }
+}
+
+export async function repostPanelForScope(params: {
+  client: Client;
+  guildId: string;
+  channelId: string;
   scopeKey: string;
   panelType: string;
   panel: InteractionReplyOptions;
@@ -156,72 +176,44 @@ export async function replaceOrEditPanelFromCommand(params: {
     teamId?: number;
     matchAssignmentId?: number;
   };
-}) {
-  const { interaction, scopeKey, panelType, panel, metadata } = params;
+}): Promise<Message | null> {
+  const { client, guildId, channelId, scopeKey, panelType, panel, metadata } = params;
   await cleanupDuplicateActiveScopeRecords(scopeKey);
-  const existing = await cleanupActiveScopeRecord(interaction.client, scopeKey);
 
-  if (existing) {
-    try {
-      const edited = await editExistingPanel(
-        interaction.client,
-        existing.active.channelId,
-        existing.active.messageId,
-        panel
-      );
-      if (edited) {
-        console.debug("[panel-lifecycle] panel edited in place", { panelType, scopeKey });
-        await registerActivePanelMessage({
-          guildId: interaction.guildId ?? "",
-          channelId: edited.channelId,
-          messageId: edited.id,
-          panelType,
-          scopeKey,
-          ...metadata,
-        });
-        if (!interaction.deferred && !interaction.replied) {
-          await interaction.deferReply({ ephemeral: true });
-          await interaction.deleteReply().catch(() => undefined);
-        }
-        return edited;
-      }
-    } catch (error) {
-      console.debug("[panel-lifecycle] panel edit failed, creating replacement", {
-        panelType,
-        scopeKey,
-        error,
-      });
-    }
+  const oldActive = await getActivePanelMessage(scopeKey);
+  const channel = await client.channels.fetch(channelId);
+  if (!channel || !channel.isTextBased() || !("send" in channel)) {
+    return null;
   }
 
-  await interaction.reply(panel);
-  const message = await interaction.fetchReply();
-  if (existing && existing.active.messageId !== message.id) {
-    await existing.message.delete().catch(() => undefined);
-    console.debug("[panel-lifecycle] active panel replaced", {
-      panelType,
-      scopeKey,
-      previousMessageId: existing.active.messageId,
-      replacementMessageId: message.id,
-    });
-  }
+  const posted = await channel.send(toMessageCreateOptions(panel));
   await registerActivePanelMessage({
-    guildId: interaction.guildId ?? "",
-    channelId: message.channelId,
-    messageId: message.id,
+    guildId,
+    channelId: posted.channelId,
+    messageId: posted.id,
     panelType,
     scopeKey,
     ...metadata,
   });
-  console.debug("[panel-lifecycle] active panel registered", { panelType, scopeKey });
-  return message;
+
+  if (oldActive && oldActive.messageId !== posted.id) {
+    await deleteTrackedPanelMessage({
+      client,
+      channelId: oldActive.channelId,
+      messageId: oldActive.messageId,
+      scopeKey,
+    });
+  }
+
+  await invalidateOldScopeMessages({ client, scopeKey, keepMessageId: posted.id });
+  return posted;
 }
 
-export async function replaceOrEditPanelFromInteraction(params: {
+export async function replaceTrackedPanelByRepost(params: {
   interaction: InteractionWithMessage;
   scopeKey: string;
   panelType: string;
-  panel: InteractionUpdateOptions;
+  panel: InteractionReplyOptions;
   metadata: {
     ownerDiscordUserId?: string;
     actorDiscordUserId?: string;
@@ -238,17 +230,65 @@ export async function replaceOrEditPanelFromInteraction(params: {
     return null;
   }
 
-  await interaction.update(panel);
-  const refreshedMessage = interaction.message;
-  await registerActivePanelMessage({
+  await acknowledgeInteractionQuietly(interaction);
+  const reposted = await repostPanelForScope({
+    client: interaction.client,
     guildId: interaction.guildId ?? "",
-    channelId: refreshedMessage.channelId,
-    messageId: refreshedMessage.id,
-    panelType,
+    channelId: interaction.channelId,
     scopeKey,
-    ...metadata,
+    panelType,
+    panel,
+    metadata,
   });
-  return refreshedMessage;
+  return reposted;
+}
+
+export async function replaceOrEditPanelFromCommand(params: {
+  interaction: ChatInputCommandInteraction;
+  scopeKey: string;
+  panelType: string;
+  panel: InteractionReplyOptions;
+  metadata: {
+    ownerDiscordUserId?: string;
+    actorDiscordUserId?: string;
+    tournamentInstanceId?: number;
+    teamId?: number;
+    matchAssignmentId?: number;
+  };
+}) {
+  const { interaction, scopeKey, panelType, panel, metadata } = params;
+  await acknowledgeInteractionQuietly(interaction);
+  const reposted = await repostPanelForScope({
+    client: interaction.client,
+    guildId: interaction.guildId ?? "",
+    channelId: interaction.channelId,
+    scopeKey,
+    panelType,
+    panel,
+    metadata,
+  });
+
+  if (interaction.deferred || interaction.replied) {
+    await interaction.deleteReply().catch(() => undefined);
+  }
+
+  return reposted;
+}
+
+export async function replaceOrEditPanelFromInteraction(params: {
+  interaction: InteractionWithMessage;
+  scopeKey: string;
+  panelType: string;
+  panel: InteractionReplyOptions;
+  metadata: {
+    ownerDiscordUserId?: string;
+    actorDiscordUserId?: string;
+    tournamentInstanceId?: number;
+    teamId?: number;
+    matchAssignmentId?: number;
+  };
+}) {
+  return replaceTrackedPanelByRepost(params);
 }
 
 export async function replaceOrEditPanelByScopeFromSelector(params: {
@@ -265,54 +305,16 @@ export async function replaceOrEditPanelByScopeFromSelector(params: {
   };
 }) {
   const { interaction, scopeKey, panelType, panel, metadata } = params;
-  await cleanupDuplicateActiveScopeRecords(scopeKey);
-  const existing = await cleanupActiveScopeRecord(interaction.client, scopeKey);
-
-  if (existing) {
-    await existing.message.edit(panel as MessageEditOptions);
-    await registerActivePanelMessage({
-      guildId: interaction.guildId ?? "",
-      channelId: existing.message.channelId,
-      messageId: existing.message.id,
-      panelType,
-      scopeKey,
-      ...metadata,
-    });
-    if (!interaction.deferred && !interaction.replied) {
-      await interaction.deferUpdate();
-    }
-    return existing.message;
-  }
-
-  const channel = interaction.channel;
-  if (!channel || !("send" in channel)) {
-    await interaction.reply({ content: "Unable to post panel in this channel.", ephemeral: true });
-    return null;
-  }
-
-  const sendablePanel: MessageCreateOptions = {
-    ...(panel as unknown as MessageCreateOptions),
-  };
-  delete (sendablePanel as Record<string, unknown>).ephemeral;
-  delete (sendablePanel as Record<string, unknown>).flags;
-  const posted = (await channel.send(sendablePanel)) as Message;
-  await registerActivePanelMessage({
+  await acknowledgeInteractionQuietly(interaction);
+  return repostPanelForScope({
+    client: interaction.client,
     guildId: interaction.guildId ?? "",
-    channelId: posted.channelId,
-    messageId: posted.id,
-    panelType,
+    channelId: interaction.channelId,
     scopeKey,
-    ...metadata,
-  });
-  console.debug("[panel-lifecycle] active panel replaced", {
     panelType,
-    scopeKey,
-    replacementMessageId: posted.id,
+    panel,
+    metadata,
   });
-  if (!interaction.deferred && !interaction.replied) {
-    await interaction.deferUpdate();
-  }
-  return posted;
 }
 
 export async function resolvePanelInstanceOrPrompt(params: {
