@@ -8,6 +8,7 @@ import {
   registerActivePanelMessage,
   removeActivePanelByMessage,
 } from "../storage/panelContext";
+import { getTeamForUser } from "../storage/teams";
 import { onPanelDataChanged, PanelDataChangeEvent, PanelType } from "./panelRefreshBus";
 
 interface TrackedPanelMessage {
@@ -76,6 +77,32 @@ async function rebuildPanel(entry: TrackedPanelMessage) {
   return buildTeamPanel(entry.userId, entry.guildId);
 }
 
+async function canRenderTrackedTeamPanel(entry: TrackedPanelMessage): Promise<boolean> {
+  if (entry.panelType !== "team" || !entry.userId) {
+    return true;
+  }
+
+  const team = await getTeamForUser(entry.userId);
+  return team !== null;
+}
+
+async function resolveTrackedPanelOrNull(entry: TrackedPanelMessage) {
+  if (entry.panelType === "team") {
+    const canRender = await canRenderTrackedTeamPanel(entry);
+    if (!canRender) {
+      console.debug("[panel-auto-update] invalid tracked team panel removed without repost", {
+        scopeKey: entry.scopeKey,
+        guildId: entry.guildId,
+        userId: entry.userId,
+        messageId: entry.messageId,
+      });
+      return null;
+    }
+  }
+
+  return rebuildPanel(entry);
+}
+
 async function updateTrackedPanel(entry: TrackedPanelMessage): Promise<void> {
   if (!botClient) {
     return;
@@ -88,7 +115,16 @@ async function updateTrackedPanel(entry: TrackedPanelMessage): Promise<void> {
       return;
     }
 
-    const nextPanel = await rebuildPanel(entry);
+    const nextPanel = await resolveTrackedPanelOrNull(entry);
+    if (!nextPanel) {
+      await deleteTrackedPanelMessage({
+        client: botClient,
+        channelId: entry.channelId,
+        messageId: entry.messageId,
+        scopeKey: entry.scopeKey,
+      });
+      return;
+    }
     const replacement = await channel.send(nextPanel);
     await registerActivePanelMessage({
       guildId: entry.guildId,

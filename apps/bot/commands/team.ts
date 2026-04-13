@@ -24,6 +24,19 @@ export const teamCommand: BotCommand = {
       return;
     }
 
+    const team = await getTeamForUser(
+      interaction.user.id,
+      interaction.inCachedGuild() ? interaction.member.roles : undefined
+    );
+
+    if (!team) {
+      await interaction.reply({
+        content: "No linked team was found for your account.",
+        ephemeral: true,
+      });
+      return;
+    }
+
     const teamPanel = await buildTeamPanel(
       interaction.user.id,
       interaction.guildId,
@@ -31,10 +44,6 @@ export const teamCommand: BotCommand = {
     );
 
     const scopeKey = buildPanelScopeKey("team", interaction.guildId, interaction.user.id);
-    const team = await getTeamForUser(
-      interaction.user.id,
-      interaction.inCachedGuild() ? interaction.member.roles : undefined
-    );
     await replaceOrEditPanelFromCommand({
       interaction,
       scopeKey,
