@@ -24,6 +24,7 @@ let botClient: Client | null = null;
 let flushTimer: NodeJS.Timeout | null = null;
 const pendingEvents: PanelDataChangeEvent[] = [];
 const DEBOUNCE_MS = 750;
+let hasLoggedPanelStorageFailure = false;
 
 function isMessageMissingError(error: unknown): boolean {
   if (!(error instanceof Error)) {
@@ -136,21 +137,31 @@ async function flushPendingEvents() {
   if (events.length === 0) {
     return;
   }
+  try {
+    const records = await findActivePanels({});
+    hasLoggedPanelStorageFailure = false;
+    const tracked: TrackedPanelMessage[] = records.map((record) => ({
+      scopeKey: record.scopeKey,
+      panelType: record.panelType as PanelType,
+      guildId: record.guildId,
+      channelId: record.channelId,
+      messageId: record.messageId,
+      userId: record.ownerDiscordUserId ?? undefined,
+      teamId: record.teamId ?? undefined,
+      tournamentInstanceId: record.tournamentInstanceId ?? undefined,
+    }));
+    const affected = tracked.filter((entry) => events.some((event) => shouldRefresh(entry, event)));
 
-  const records = await findActivePanels({});
-  const tracked: TrackedPanelMessage[] = records.map((record) => ({
-    scopeKey: record.scopeKey,
-    panelType: record.panelType as PanelType,
-    guildId: record.guildId,
-    channelId: record.channelId,
-    messageId: record.messageId,
-    userId: record.ownerDiscordUserId ?? undefined,
-    teamId: record.teamId ?? undefined,
-    tournamentInstanceId: record.tournamentInstanceId ?? undefined,
-  }));
-  const affected = tracked.filter((entry) => events.some((event) => shouldRefresh(entry, event)));
-
-  await Promise.all(affected.map((entry) => updateTrackedPanel(entry)));
+    await Promise.all(affected.map((entry) => updateTrackedPanel(entry)));
+  } catch (error) {
+    if (!hasLoggedPanelStorageFailure) {
+      hasLoggedPanelStorageFailure = true;
+      console.error(
+        "[panel-auto-update] Panel lifecycle storage unavailable; skipping queued refreshes until storage is healthy.",
+        error
+      );
+    }
+  }
 }
 
 function queueRefresh(event: PanelDataChangeEvent): void {

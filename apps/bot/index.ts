@@ -1,6 +1,7 @@
 import "dotenv/config";
 import { Client, GatewayIntentBits, REST, Routes } from "discord.js";
 import { initializePanelAutoUpdateService, unregisterPanelMessage } from "./services/panelAutoUpdateService";
+import { validateBotPrismaClient } from "./storage/prisma";
 
 const token = process.env.DISCORD_BOT_TOKEN;
 const clientId = process.env.DISCORD_CLIENT_ID;
@@ -9,6 +10,8 @@ const guildId = process.env.DISCORD_GUILD_ID;
 if (!token) throw new Error("Missing DISCORD_BOT_TOKEN");
 if (!clientId) throw new Error("Missing DISCORD_CLIENT_ID");
 if (!guildId) throw new Error("Missing DISCORD_GUILD_ID");
+
+validateBotPrismaClient();
 
 const config = {
   token,

@@ -14,9 +14,30 @@ export interface ActivePanelMessageRecordInput {
   matchAssignmentId?: number;
 }
 
+function requireActivePanelMessageDelegate() {
+  const delegate = prisma.activePanelMessage;
+  if (!delegate) {
+    throw new Error(
+      "Prisma client missing activePanelMessage delegate. Did you run prisma generate and apply the migration?"
+    );
+  }
+  return delegate;
+}
+
+function requireSavedPanelContextDelegate() {
+  const delegate = prisma.savedPanelContext;
+  if (!delegate) {
+    throw new Error(
+      "Prisma client missing savedPanelContext delegate. Did you run prisma generate and apply the migration?"
+    );
+  }
+  return delegate;
+}
+
 export async function registerActivePanelMessage(input: ActivePanelMessageRecordInput) {
+  const activePanelMessage = requireActivePanelMessageDelegate();
   const now = new Date();
-  const record = await prisma.activePanelMessage.upsert({
+  const record = await activePanelMessage.upsert({
     where: { scopeKey: input.scopeKey },
     create: {
       guildId: input.guildId,
@@ -51,11 +72,11 @@ export async function registerActivePanelMessage(input: ActivePanelMessageRecord
 }
 
 export async function getActivePanelMessage(scopeKey: string) {
-  return prisma.activePanelMessage.findUnique({ where: { scopeKey } });
+  return requireActivePanelMessageDelegate().findUnique({ where: { scopeKey } });
 }
 
 export async function invalidatePanelMessage(scopeKey: string) {
-  return prisma.activePanelMessage.updateMany({
+  return requireActivePanelMessageDelegate().updateMany({
     where: { scopeKey, invalidatedAt: null },
     data: { invalidatedAt: new Date(), updatedAt: new Date() },
   });
@@ -68,7 +89,7 @@ export async function findActivePanels(filters: {
   teamId?: number;
   ownerDiscordUserId?: string;
 }) {
-  return prisma.activePanelMessage.findMany({
+  return requireActivePanelMessageDelegate().findMany({
     where: {
       invalidatedAt: null,
       panelType: filters.panelType,
@@ -81,7 +102,7 @@ export async function findActivePanels(filters: {
 }
 
 export async function removeActivePanelByMessage(channelId: string, messageId: string) {
-  return prisma.activePanelMessage.deleteMany({
+  return requireActivePanelMessageDelegate().deleteMany({
     where: { channelId, messageId },
   });
 }
@@ -91,7 +112,7 @@ export async function getSavedPanelInstance(
   discordUserId: string,
   panelType: SavedPanelType
 ) {
-  return prisma.savedPanelContext.findUnique({
+  return requireSavedPanelContextDelegate().findUnique({
     where: {
       guildId_discordUserId_panelType: {
         guildId,
@@ -109,7 +130,7 @@ export async function setSavedPanelInstance(
   tournamentInstanceId: number
 ) {
   const now = new Date();
-  return prisma.savedPanelContext.upsert({
+  return requireSavedPanelContextDelegate().upsert({
     where: {
       guildId_discordUserId_panelType: {
         guildId,
@@ -137,7 +158,7 @@ export async function clearSavedPanelInstance(
   discordUserId: string,
   panelType: SavedPanelType
 ) {
-  return prisma.savedPanelContext.deleteMany({
+  return requireSavedPanelContextDelegate().deleteMany({
     where: {
       guildId,
       discordUserId,
