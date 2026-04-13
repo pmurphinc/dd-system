@@ -10,11 +10,13 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate:dev": "prisma migrate dev",
     "prisma:migrate:deploy": "prisma migrate deploy",
+    "prisma:baseline": "prisma migrate resolve --applied 20260413_000000_baseline",
+    "prisma:migrate:local": "npm run prisma:migrate:deploy && npm run prisma:generate",
     "prisma:setup": "npm run prisma:migrate:deploy && npm run prisma:generate",
     "prisma:db:push": "prisma db push",
     "postinstall": "npm run prisma:generate"
   },
-  "description": "This is a starter scaffold for a Discord-first tournament platform for **THE FINALS – Development Division**.",
+  "description": "This is a starter scaffold for a Discord-first tournament platform for **THE FINALS \u2013 Development Division**.",
   "main": "index.js",
   "directories": {
     "doc": "docs"
