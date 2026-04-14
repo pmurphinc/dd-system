@@ -109,9 +109,9 @@ export async function expireScrimQueueEntries(guildId: string): Promise<number> 
 
       await tx.$executeRawUnsafe(
         `INSERT INTO "ScrimTeamState" ("teamId","guildId","status","lastUpdatedAt","createdAt","updatedAt")
-         VALUES (?,?, 'IDLE', ?, ?, ?)
+         VALUES (?,?, 'EXPIRED', ?, ?, ?)
          ON CONFLICT("teamId") DO UPDATE SET
-         "status" = 'IDLE',
+         "status" = 'EXPIRED',
          "activeQueueEntryId" = NULL,
          "activeMatchId" = NULL,
          "opponentTeamId" = NULL,
@@ -355,10 +355,10 @@ export async function cancelScrimSearch(guildId: string, teamId: number, actorDi
     );
     await tx.$executeRawUnsafe(
       `INSERT INTO "ScrimTeamState" ("teamId","guildId","status","lastUpdatedAt","createdAt","updatedAt") VALUES (?,?,?,?,?,?)
-       ON CONFLICT("teamId") DO UPDATE SET "status"='IDLE',"activeQueueEntryId"=NULL,"lastUpdatedAt"=excluded."lastUpdatedAt","updatedAt"=excluded."updatedAt"`,
+       ON CONFLICT("teamId") DO UPDATE SET "status"='CANCELLED',"activeQueueEntryId"=NULL,"activeMatchId"=NULL,"opponentTeamId"=NULL,"lastUpdatedAt"=excluded."lastUpdatedAt","updatedAt"=excluded."updatedAt"`,
       teamId,
       guildId,
-      "IDLE",
+      "CANCELLED",
       ts.toISOString(),
       ts.toISOString(),
       ts.toISOString()
@@ -462,7 +462,8 @@ export async function leaveOrCompleteScrim(guildId: string, teamId: number, comp
     );
 
     await tx.$executeRawUnsafe(
-      `UPDATE "ScrimTeamState" SET "status"='IDLE',"activeQueueEntryId"=NULL,"activeMatchId"=NULL,"opponentTeamId"=NULL,"lastUpdatedAt"=?,"updatedAt"=? WHERE "guildId"=? AND "teamId" IN (?,?)`,
+      `UPDATE "ScrimTeamState" SET "status"=?,"activeQueueEntryId"=NULL,"activeMatchId"=NULL,"opponentTeamId"=NULL,"lastUpdatedAt"=?,"updatedAt"=? WHERE "guildId"=? AND "teamId" IN (?,?)`,
+      status,
       ts,
       ts,
       guildId,

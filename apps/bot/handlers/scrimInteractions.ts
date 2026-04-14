@@ -24,6 +24,9 @@ import {
 } from "../storage/scrims";
 import {
   buildPanelScopeKey,
+  isStalePanelInteraction,
+  rejectStalePanelInteraction,
+  repostPanelForScope,
   replaceOrEditPanelFromInteraction,
 } from "../services/panelLifecycle";
 import {
@@ -36,6 +39,7 @@ const DURATIONS = [30, 60, 120, 180, 240];
 
 async function refreshScrimPanel(interaction: ButtonInteraction | ModalSubmitInteraction, teamId: number) {
   if (!interaction.inCachedGuild()) return;
+  const scopeKey = buildPanelScopeKey("scrim", interaction.guildId, interaction.user.id);
   const panel = await buildScrimPanel({
     guildId: interaction.guildId,
     userId: interaction.user.id,
@@ -45,13 +49,30 @@ async function refreshScrimPanel(interaction: ButtonInteraction | ModalSubmitInt
   });
 
   if (interaction.isModalSubmit()) {
-    await interaction.reply({ ...panel, ephemeral: true });
+    if (!interaction.channelId) {
+      await interaction.reply({ content: "Lobby code updated.", ephemeral: true });
+      return;
+    }
+    await repostPanelForScope({
+      client: interaction.client,
+      guildId: interaction.guildId,
+      channelId: interaction.channelId,
+      scopeKey,
+      panelType: "scrim",
+      panel,
+      metadata: {
+        ownerDiscordUserId: interaction.user.id,
+        actorDiscordUserId: interaction.user.id,
+        teamId,
+      },
+    });
+    await interaction.reply({ content: "Lobby code updated. Use the latest scrim panel below.", ephemeral: true });
     return;
   }
 
   await replaceOrEditPanelFromInteraction({
     interaction,
-    scopeKey: buildPanelScopeKey("scrim", interaction.guildId, interaction.user.id),
+    scopeKey,
     panelType: "scrim",
     panel,
     metadata: {
@@ -85,6 +106,15 @@ export async function handleScrimButtonInteraction(interaction: ButtonInteractio
 
   const [, action, teamIdRaw] = interaction.customId.split(":");
   const teamId = Number(teamIdRaw);
+  const scopeKey = buildPanelScopeKey("scrim", interaction.guildId, interaction.user.id);
+  const staleSafeActions = new Set(["duration", "duration_cancel"]);
+  if (
+    !staleSafeActions.has(action) &&
+    (await isStalePanelInteraction(interaction, scopeKey))
+  ) {
+    await rejectStalePanelInteraction(interaction);
+    return true;
+  }
 
   if (action === "refresh") {
     await refreshScrimPanel(interaction, teamId);

@@ -32,6 +32,70 @@ function statusLabel(status?: string | null): string {
   }
 }
 
+type ScrimPanelStatus =
+  | "IDLE"
+  | "LOOKING"
+  | "MATCHED"
+  | "IN_LOBBY_SETUP"
+  | "READY"
+  | "ACTIVE"
+  | "COMPLETED"
+  | "CANCELLED"
+  | "EXPIRED";
+
+interface ScrimActionVisibility {
+  canLookForScrim: boolean;
+  canCancelSearch: boolean;
+  canSetLobbyCode: boolean;
+  canMarkReady: boolean;
+  canLeaveMatch: boolean;
+  canCompleteScrim: boolean;
+  canRequeue: boolean;
+  canRequestNewMap: boolean;
+  canClearLobbyCode: boolean;
+  canViewQueue: boolean;
+  canViewMatches: boolean;
+}
+
+function getScrimActionVisibility(input: {
+  status: ScrimPanelStatus;
+  hasActiveMatch: boolean;
+  teamReady: boolean;
+  canManageTeam: boolean;
+  isAdminViewer: boolean;
+}): ScrimActionVisibility {
+  const { status, hasActiveMatch, teamReady, canManageTeam, isAdminViewer } = input;
+  const isMatchedFlow = status === "MATCHED" || status === "IN_LOBBY_SETUP";
+  const isActiveFlow = status === "READY" || status === "ACTIVE";
+  const isPostMatch = status === "COMPLETED" || status === "CANCELLED" || status === "EXPIRED";
+
+  return {
+    canLookForScrim: canManageTeam && status === "IDLE",
+    canCancelSearch: canManageTeam && status === "LOOKING",
+    canSetLobbyCode: canManageTeam && hasActiveMatch && (isMatchedFlow || isActiveFlow),
+    canMarkReady: canManageTeam && hasActiveMatch && (isMatchedFlow || isActiveFlow) && !teamReady,
+    canLeaveMatch: canManageTeam && hasActiveMatch && (isMatchedFlow || isActiveFlow),
+    canCompleteScrim: canManageTeam && hasActiveMatch && isActiveFlow,
+    canRequeue: canManageTeam && isPostMatch,
+    canRequestNewMap: canManageTeam && status === "COMPLETED",
+    canClearLobbyCode: isAdminViewer && hasActiveMatch && (isMatchedFlow || isActiveFlow),
+    canViewQueue: isAdminViewer && !isActiveFlow,
+    canViewMatches: isAdminViewer,
+  };
+}
+
+function chunkButtons(buttons: ButtonBuilder[], chunkSize = 4) {
+  const rows: Array<ActionRowBuilder<ButtonBuilder>> = [];
+  for (let index = 0; index < buttons.length; index += chunkSize) {
+    rows.push(
+      new ActionRowBuilder<ButtonBuilder>().addComponents(
+        ...buttons.slice(index, index + chunkSize)
+      )
+    );
+  }
+  return rows;
+}
+
 export async function buildScrimPanel(params: {
   guildId: string;
   userId: string;
@@ -57,7 +121,23 @@ export async function buildScrimPanel(params: {
   const leaderAccess = await getTeamLeaderAccessDebug(guildId, memberRoles, team, userId);
   const isLeader = leaderAccess.isLeader;
 
-  const activeStatus = scrim.activeMatch?.status ?? scrim.activeQueue?.status ?? scrim.teamState?.status ?? "IDLE";
+  const activeStatus = (scrim.activeMatch?.status ??
+    scrim.activeQueue?.status ??
+    scrim.teamState?.status ??
+    "IDLE") as ScrimPanelStatus;
+  const teamIsA = scrim.activeMatch?.teamAId === team.id;
+  const teamReady = teamIsA
+    ? Boolean(scrim.activeMatch?.teamAReadyAt)
+    : Boolean(scrim.activeMatch?.teamBReadyAt);
+  const visibility = getScrimActionVisibility({
+    status: activeStatus,
+    hasActiveMatch: Boolean(scrim.activeMatch),
+    teamReady,
+    canManageTeam: isLeader || Boolean(isAdminViewer),
+    isAdminViewer: Boolean(isAdminViewer),
+  });
+  const teamA = scrim.activeMatch ? await getTeamById(scrim.activeMatch.teamAId) : null;
+  const teamB = scrim.activeMatch ? await getTeamById(scrim.activeMatch.teamBId) : null;
   const notes =
     activeStatus === "LOOKING"
       ? "Waiting in queue. You can cancel search anytime."
@@ -93,7 +173,11 @@ export async function buildScrimPanel(params: {
       {
         name: "Ready States",
         value: scrim.activeMatch
-          ? `Team A: ${scrim.activeMatch.teamAReadyAt ? "✅" : "❌"}\nTeam B: ${scrim.activeMatch.teamBReadyAt ? "✅" : "❌"}`
+          ? `${teamA?.teamName ?? `Team ${scrim.activeMatch.teamAId}`}: ${
+              scrim.activeMatch.teamAReadyAt ? "✅ Ready" : "❌ Not Ready"
+            }\n${teamB?.teamName ?? `Team ${scrim.activeMatch.teamBId}`}: ${
+              scrim.activeMatch.teamBReadyAt ? "✅ Ready" : "❌ Not Ready"
+            }`
           : "No active match",
         inline: true,
       },
@@ -106,42 +190,114 @@ export async function buildScrimPanel(params: {
     );
 
   const components: Array<ActionRowBuilder<ButtonBuilder>> = [];
+  const primaryButtons: ButtonBuilder[] = [];
 
-  const refreshRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder().setCustomId(`scrim:refresh:${team.id}`).setLabel("Refresh").setStyle(ButtonStyle.Secondary)
+  if (visibility.canLookForScrim) {
+    primaryButtons.push(
+      new ButtonBuilder()
+        .setCustomId(`scrim:looking:${team.id}`)
+        .setLabel("Looking for Scrim")
+        .setStyle(ButtonStyle.Success)
+    );
+  }
+  if (visibility.canCancelSearch) {
+    primaryButtons.push(
+      new ButtonBuilder()
+        .setCustomId(`scrim:cancel:${team.id}`)
+        .setLabel("Cancel Search")
+        .setStyle(ButtonStyle.Secondary)
+    );
+  }
+  if (visibility.canSetLobbyCode) {
+    primaryButtons.push(
+      new ButtonBuilder()
+        .setCustomId(`scrim:set_code:${team.id}`)
+        .setLabel(scrim.activeMatch?.lobbyCode ? "Edit Lobby Code" : "Set Lobby Code")
+        .setStyle(ButtonStyle.Primary)
+    );
+  }
+  if (visibility.canMarkReady) {
+    primaryButtons.push(
+      new ButtonBuilder()
+        .setCustomId(`scrim:ready:${team.id}`)
+        .setLabel("Mark Ready")
+        .setStyle(ButtonStyle.Success)
+    );
+  }
+  if (visibility.canLeaveMatch) {
+    primaryButtons.push(
+      new ButtonBuilder()
+        .setCustomId(`scrim:leave:${team.id}`)
+        .setLabel("Leave Match")
+        .setStyle(ButtonStyle.Danger)
+    );
+  }
+  if (visibility.canCompleteScrim) {
+    primaryButtons.push(
+      new ButtonBuilder()
+        .setCustomId(`scrim:complete:${team.id}`)
+        .setLabel("Complete Scrim")
+        .setStyle(ButtonStyle.Secondary)
+    );
+  }
+  if (visibility.canRequeue) {
+    primaryButtons.push(
+      new ButtonBuilder()
+        .setCustomId(`scrim:requeue:${team.id}`)
+        .setLabel("Requeue")
+        .setStyle(ButtonStyle.Primary)
+    );
+  }
+  if (visibility.canRequestNewMap) {
+    primaryButtons.push(
+      new ButtonBuilder()
+        .setCustomId(`scrim:rematch:${team.id}`)
+        .setLabel("Request New Map")
+        .setStyle(ButtonStyle.Secondary)
+    );
+  }
+
+  primaryButtons.push(
+    new ButtonBuilder()
+      .setCustomId(`scrim:refresh:${team.id}`)
+      .setLabel("Refresh")
+      .setStyle(ButtonStyle.Secondary)
   );
 
-  if (isLeader || isAdminViewer) {
-    components.push(
-      new ActionRowBuilder<ButtonBuilder>().addComponents(
-        new ButtonBuilder().setCustomId(`scrim:looking:${team.id}`).setLabel("Looking for Scrim").setStyle(ButtonStyle.Success),
-        new ButtonBuilder().setCustomId(`scrim:cancel:${team.id}`).setLabel("Cancel Search").setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId(`scrim:set_code:${team.id}`).setLabel("Set Lobby Code").setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId(`scrim:ready:${team.id}`).setLabel("Mark Ready").setStyle(ButtonStyle.Success),
-      )
-    );
-
-    components.push(
-      new ActionRowBuilder<ButtonBuilder>().addComponents(
-        new ButtonBuilder().setCustomId(`scrim:leave:${team.id}`).setLabel("Leave Match").setStyle(ButtonStyle.Danger),
-        new ButtonBuilder().setCustomId(`scrim:complete:${team.id}`).setLabel("Complete Scrim").setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId(`scrim:requeue:${team.id}`).setLabel("Requeue").setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId(`scrim:rematch:${team.id}`).setLabel("Request New Map").setStyle(ButtonStyle.Secondary),
-      )
-    );
-  }
+  components.push(...chunkButtons(primaryButtons));
 
   if (isAdminViewer) {
-    components.push(
-      new ActionRowBuilder<ButtonBuilder>().addComponents(
-        new ButtonBuilder().setCustomId(`scrim:admin_queue:${team.id}`).setLabel("View Queue").setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId(`scrim:admin_matches:${team.id}`).setLabel("View Matches").setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId(`scrim:admin_clear_code:${team.id}`).setLabel("Clear Lobby Code").setStyle(ButtonStyle.Danger)
-      )
-    );
-  }
+    const adminButtons: ButtonBuilder[] = [];
+    if (visibility.canViewQueue) {
+      adminButtons.push(
+        new ButtonBuilder()
+          .setCustomId(`scrim:admin_queue:${team.id}`)
+          .setLabel("View Queue")
+          .setStyle(ButtonStyle.Secondary)
+      );
+    }
+    if (visibility.canViewMatches) {
+      adminButtons.push(
+        new ButtonBuilder()
+          .setCustomId(`scrim:admin_matches:${team.id}`)
+          .setLabel("View Matches")
+          .setStyle(ButtonStyle.Secondary)
+      );
+    }
 
-  components.push(refreshRow);
+    if (visibility.canClearLobbyCode) {
+      adminButtons.push(
+        new ButtonBuilder()
+          .setCustomId(`scrim:admin_clear_code:${team.id}`)
+          .setLabel("Clear Lobby Code")
+          .setStyle(ButtonStyle.Danger)
+      );
+    }
+
+    if (adminButtons.length > 0) {
+      components.push(...chunkButtons(adminButtons));
+    }
+  }
 
   return { embeds: [embed], components };
 }
