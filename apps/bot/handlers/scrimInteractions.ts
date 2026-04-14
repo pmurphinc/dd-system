@@ -5,8 +5,6 @@ import {
   ButtonStyle,
   ModalBuilder,
   ModalSubmitInteraction,
-  StringSelectMenuBuilder,
-  StringSelectMenuInteraction,
   TextInputBuilder,
   TextInputStyle,
 } from "discord.js";
@@ -36,7 +34,7 @@ import { createAuditLog } from "../storage/auditLog";
 
 const DURATIONS = [30, 60, 120, 180, 240];
 
-async function refreshScrimPanel(interaction: ButtonInteraction | StringSelectMenuInteraction | ModalSubmitInteraction, teamId: number) {
+async function refreshScrimPanel(interaction: ButtonInteraction | ModalSubmitInteraction, teamId: number) {
   if (!interaction.inCachedGuild()) return;
   const panel = await buildScrimPanel({
     guildId: interaction.guildId,
@@ -64,7 +62,7 @@ async function refreshScrimPanel(interaction: ButtonInteraction | StringSelectMe
   });
 }
 
-async function ensureLeader(interaction: ButtonInteraction | ModalSubmitInteraction | StringSelectMenuInteraction, teamId: number): Promise<boolean> {
+async function ensureLeader(interaction: ButtonInteraction | ModalSubmitInteraction, teamId: number): Promise<boolean> {
   if (!interaction.inCachedGuild()) return false;
   const team = await getTeamById(teamId);
   if (!team) {
@@ -95,20 +93,57 @@ export async function handleScrimButtonInteraction(interaction: ButtonInteractio
 
   if (action === "looking") {
     if (!(await ensureLeader(interaction, teamId))) return true;
-    const menu = new StringSelectMenuBuilder()
-      .setCustomId(`scrim:select_duration:${teamId}`)
-      .setPlaceholder("Choose queue duration")
-      .addOptions(
-        DURATIONS.map((minutes) => ({
-          label: minutes === 60 ? "1 hour" : minutes < 60 ? `${minutes} minutes` : `${minutes / 60} hours`,
-          value: `${minutes}`,
-        }))
-      );
+    const durationButtons = DURATIONS.map((minutes) =>
+      new ButtonBuilder()
+        .setCustomId(`scrim:duration:${minutes}:${teamId}`)
+        .setLabel(minutes === 60 ? "1h" : minutes < 60 ? `${minutes}m` : `${minutes / 60}h`)
+        .setStyle(ButtonStyle.Primary)
+    );
     await interaction.reply({
       content: "How long should your team stay in queue?",
-      components: [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(menu)],
+      components: [
+        new ActionRowBuilder<ButtonBuilder>().addComponents(...durationButtons.slice(0, 3)),
+        new ActionRowBuilder<ButtonBuilder>().addComponents(
+          ...durationButtons.slice(3),
+          new ButtonBuilder()
+            .setCustomId(`scrim:duration_cancel:${teamId}`)
+            .setLabel("Cancel")
+            .setStyle(ButtonStyle.Secondary)
+        ),
+      ],
       ephemeral: true,
     });
+    return true;
+  }
+
+  if (action === "duration_cancel") {
+    if (!(await ensureLeader(interaction, teamId))) return true;
+    await interaction.update({
+      content: "Scrim queue duration selection cancelled.",
+      components: [],
+    });
+    return true;
+  }
+
+  if (action === "duration") {
+    const minutes = Number(interaction.customId.split(":")[2]);
+    const durationTeamId = Number(interaction.customId.split(":")[3]);
+    if (Number.isNaN(minutes) || Number.isNaN(durationTeamId)) {
+      await interaction.reply({ content: "Invalid scrim duration action.", ephemeral: true });
+      return true;
+    }
+    if (!(await ensureLeader(interaction, durationTeamId))) return true;
+    try {
+      await queueForScrim({
+        guildId: interaction.guildId,
+        teamId: durationTeamId,
+        requestedByDiscordUserId: interaction.user.id,
+        durationMinutes: minutes,
+      });
+      await refreshScrimPanel(interaction, durationTeamId);
+    } catch (error) {
+      await interaction.reply({ content: error instanceof Error ? error.message : "Failed to start scrim queue.", ephemeral: true });
+    }
     return true;
   }
 
@@ -210,28 +245,6 @@ export async function handleScrimButtonInteraction(interaction: ButtonInteractio
     return true;
   }
 
-  return true;
-}
-
-export async function handleScrimSelectInteraction(interaction: StringSelectMenuInteraction): Promise<boolean> {
-  if (!interaction.customId.startsWith("scrim:select_duration:")) return false;
-  if (!interaction.inCachedGuild()) return true;
-
-  const teamId = Number(interaction.customId.split(":")[2]);
-  if (!(await ensureLeader(interaction, teamId))) return true;
-
-  try {
-    const minutes = Number(interaction.values[0]);
-    await queueForScrim({
-      guildId: interaction.guildId,
-      teamId,
-      requestedByDiscordUserId: interaction.user.id,
-      durationMinutes: minutes,
-    });
-    await refreshScrimPanel(interaction, teamId);
-  } catch (error) {
-    await interaction.reply({ content: error instanceof Error ? error.message : "Failed to start scrim queue.", ephemeral: true });
-  }
   return true;
 }
 
