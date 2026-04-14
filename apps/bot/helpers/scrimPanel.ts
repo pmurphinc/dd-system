@@ -138,6 +138,13 @@ export async function buildScrimPanel(params: {
   });
   const teamA = scrim.activeMatch ? await getTeamById(scrim.activeMatch.teamAId) : null;
   const teamB = scrim.activeMatch ? await getTeamById(scrim.activeMatch.teamBId) : null;
+  const readyStateLabel = scrim.activeMatch
+    ? `${teamA?.teamName ?? `Team ${scrim.activeMatch.teamAId}`}: ${
+        scrim.activeMatch.teamAReadyAt ? "✅ Ready" : "❌ Not Ready"
+      }\n${teamB?.teamName ?? `Team ${scrim.activeMatch.teamBId}`}: ${
+        scrim.activeMatch.teamBReadyAt ? "✅ Ready" : "❌ Not Ready"
+      }`
+    : "No active match";
   const notes =
     activeStatus === "LOOKING"
       ? "Waiting in queue. You can cancel search anytime."
@@ -172,13 +179,7 @@ export async function buildScrimPanel(params: {
       },
       {
         name: "Ready States",
-        value: scrim.activeMatch
-          ? `${teamA?.teamName ?? `Team ${scrim.activeMatch.teamAId}`}: ${
-              scrim.activeMatch.teamAReadyAt ? "✅ Ready" : "❌ Not Ready"
-            }\n${teamB?.teamName ?? `Team ${scrim.activeMatch.teamBId}`}: ${
-              scrim.activeMatch.teamBReadyAt ? "✅ Ready" : "❌ Not Ready"
-            }`
-          : "No active match",
+        value: readyStateLabel,
         inline: true,
       },
       {

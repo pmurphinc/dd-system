@@ -3,13 +3,14 @@ import {
   ButtonBuilder,
   ButtonInteraction,
   ButtonStyle,
+  MessageEditOptions,
   ModalBuilder,
   ModalSubmitInteraction,
   TextInputBuilder,
   TextInputStyle,
 } from "discord.js";
 import { buildScrimPanel } from "../helpers/scrimPanel";
-import { getTeamById } from "../storage/teams";
+import { getTeamById, getTeamForUser } from "../storage/teams";
 import {
   adminClearScrimLobbyCode,
   adminListActiveScrimMatches,
@@ -26,7 +27,6 @@ import {
   buildPanelScopeKey,
   isStalePanelInteraction,
   rejectStalePanelInteraction,
-  repostPanelForScope,
   replaceOrEditPanelFromInteraction,
 } from "../services/panelLifecycle";
 import {
@@ -34,10 +34,66 @@ import {
   hasAdminInteractionAccess,
 } from "../helpers/permissions";
 import { createAuditLog } from "../storage/auditLog";
+import { getActivePanelMessage } from "../storage/panelContext";
 
 const DURATIONS = [30, 60, 120, 180, 240];
 
-async function refreshScrimPanel(interaction: ButtonInteraction | ModalSubmitInteraction, teamId: number) {
+type ScrimInteraction = ButtonInteraction | ModalSubmitInteraction;
+
+function toMessageEditOptions(panel: Awaited<ReturnType<typeof buildScrimPanel>>): MessageEditOptions {
+  const editPayload: Record<string, unknown> = {
+    ...(panel as unknown as Record<string, unknown>),
+  };
+  delete editPayload.ephemeral;
+  delete editPayload.flags;
+  return editPayload as MessageEditOptions;
+}
+
+async function sendEphemeral(interaction: ScrimInteraction, content: string): Promise<void> {
+  if (interaction.deferred || interaction.replied) {
+    if (interaction.isModalSubmit()) {
+      await interaction.editReply({ content });
+      return;
+    }
+    await interaction.followUp({ content, ephemeral: true });
+    return;
+  }
+
+  await interaction.reply({ content, ephemeral: true });
+}
+
+async function updateTrackedScrimPanelMessage(interaction: ScrimInteraction, teamId: number) {
+  if (!interaction.inCachedGuild()) {
+    return false;
+  }
+  const scopeKey = buildPanelScopeKey("scrim", interaction.guildId, interaction.user.id);
+  const panel = await buildScrimPanel({
+    guildId: interaction.guildId,
+    userId: interaction.user.id,
+    memberRoles: interaction.member.roles,
+    forcedTeamId: teamId,
+    isAdminViewer: await hasAdminInteractionAccess(interaction),
+  });
+
+  const active = await getActivePanelMessage(scopeKey);
+  if (!active) {
+    return false;
+  }
+
+  try {
+    const channel = await interaction.client.channels.fetch(active.channelId);
+    if (!channel || !channel.isTextBased()) {
+      return false;
+    }
+    const message = await channel.messages.fetch(active.messageId);
+    await message.edit(toMessageEditOptions(panel));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function refreshScrimPanel(interaction: ScrimInteraction, teamId: number) {
   if (!interaction.inCachedGuild()) return;
   const scopeKey = buildPanelScopeKey("scrim", interaction.guildId, interaction.user.id);
   const panel = await buildScrimPanel({
@@ -48,15 +104,9 @@ async function refreshScrimPanel(interaction: ButtonInteraction | ModalSubmitInt
     isAdminViewer: await hasAdminInteractionAccess(interaction),
   });
 
-  if (interaction.isModalSubmit()) {
-    if (!interaction.channelId) {
-      await interaction.reply({ content: "Lobby code updated.", ephemeral: true });
-      return;
-    }
-    await repostPanelForScope({
-      client: interaction.client,
-      guildId: interaction.guildId,
-      channelId: interaction.channelId,
+  if (interaction.isButton()) {
+    await replaceOrEditPanelFromInteraction({
+      interaction,
       scopeKey,
       panelType: "scrim",
       panel,
@@ -66,38 +116,73 @@ async function refreshScrimPanel(interaction: ButtonInteraction | ModalSubmitInt
         teamId,
       },
     });
-    await interaction.reply({ content: "Lobby code updated. Use the latest scrim panel below.", ephemeral: true });
     return;
   }
 
-  await replaceOrEditPanelFromInteraction({
-    interaction,
-    scopeKey,
-    panelType: "scrim",
-    panel,
-    metadata: {
-      ownerDiscordUserId: interaction.user.id,
-      actorDiscordUserId: interaction.user.id,
+  const refreshedTrackedPanel = await updateTrackedScrimPanelMessage(interaction, teamId);
+  if (!refreshedTrackedPanel) {
+    console.debug("[scrim] failed to refresh tracked scrim panel after modal submit", {
+      guildId: interaction.guildId,
       teamId,
-    },
-  });
+      userId: interaction.user.id,
+    });
+  }
 }
 
-async function ensureLeader(interaction: ButtonInteraction | ModalSubmitInteraction, teamId: number): Promise<boolean> {
-  if (!interaction.inCachedGuild()) return false;
-  const team = await getTeamById(teamId);
-  if (!team) {
-    await interaction.reply({ content: "Team not found.", ephemeral: true });
-    return false;
+async function resolveManagedTeamId(
+  interaction: ScrimInteraction,
+  requestedTeamId: number
+): Promise<number | null> {
+  if (!interaction.inCachedGuild()) return null;
+
+  const requestedTeam = await getTeamById(requestedTeamId);
+  if (!requestedTeam) {
+    await sendEphemeral(interaction, "Team not found.");
+    return null;
   }
-  const isAdmin = await hasAdminInteractionAccess(interaction);
-  if (isAdmin) return true;
-  const access = await getTeamLeaderAccessDebug(interaction.guildId, interaction.member.roles, team, interaction.user.id);
-  if (!access.isLeader) {
-    await interaction.reply({ content: "Only team leaders can manage scrim actions.", ephemeral: true });
-    return false;
+
+  if (await hasAdminInteractionAccess(interaction)) {
+    return requestedTeamId;
   }
-  return true;
+
+  const directAccess = await getTeamLeaderAccessDebug(
+    interaction.guildId,
+    interaction.member.roles,
+    requestedTeam,
+    interaction.user.id
+  );
+  if (directAccess.isLeader) {
+    return requestedTeamId;
+  }
+
+  const actingTeam = await getTeamForUser(interaction.user.id, interaction.member.roles);
+  if (!actingTeam) {
+    await sendEphemeral(interaction, "Only team leaders can manage scrim actions.");
+    return null;
+  }
+
+  const actingLeaderAccess = await getTeamLeaderAccessDebug(
+    interaction.guildId,
+    interaction.member.roles,
+    actingTeam,
+    interaction.user.id
+  );
+  if (!actingLeaderAccess.isLeader) {
+    await sendEphemeral(interaction, "Only team leaders can manage scrim actions.");
+    return null;
+  }
+
+  const requestedSnapshot = await getScrimStateForTeam(interaction.guildId, requestedTeamId);
+  const activeMatch = requestedSnapshot.activeMatch;
+  const actingTeamIsInSameMatch =
+    activeMatch && (activeMatch.teamAId === actingTeam.id || activeMatch.teamBId === actingTeam.id);
+
+  if (actingTeamIsInSameMatch) {
+    return actingTeam.id;
+  }
+
+  await sendEphemeral(interaction, "You can only manage scrim actions for your own team.");
+  return null;
 }
 
 export async function handleScrimButtonInteraction(interaction: ButtonInteraction): Promise<boolean> {
@@ -122,10 +207,11 @@ export async function handleScrimButtonInteraction(interaction: ButtonInteractio
   }
 
   if (action === "looking") {
-    if (!(await ensureLeader(interaction, teamId))) return true;
+    const managedTeamId = await resolveManagedTeamId(interaction, teamId);
+    if (!managedTeamId) return true;
     const durationButtons = DURATIONS.map((minutes) =>
       new ButtonBuilder()
-        .setCustomId(`scrim:duration:${minutes}:${teamId}`)
+        .setCustomId(`scrim:duration:${minutes}:${managedTeamId}`)
         .setLabel(minutes === 60 ? "1h" : minutes < 60 ? `${minutes}m` : `${minutes / 60}h`)
         .setStyle(ButtonStyle.Primary)
     );
@@ -136,7 +222,7 @@ export async function handleScrimButtonInteraction(interaction: ButtonInteractio
         new ActionRowBuilder<ButtonBuilder>().addComponents(
           ...durationButtons.slice(3),
           new ButtonBuilder()
-            .setCustomId(`scrim:duration_cancel:${teamId}`)
+            .setCustomId(`scrim:duration_cancel:${managedTeamId}`)
             .setLabel("Cancel")
             .setStyle(ButtonStyle.Secondary)
         ),
@@ -147,7 +233,8 @@ export async function handleScrimButtonInteraction(interaction: ButtonInteractio
   }
 
   if (action === "duration_cancel") {
-    if (!(await ensureLeader(interaction, teamId))) return true;
+    const managedTeamId = await resolveManagedTeamId(interaction, teamId);
+    if (!managedTeamId) return true;
     await interaction.update({
       content: "Scrim queue duration selection cancelled.",
       components: [],
@@ -162,15 +249,16 @@ export async function handleScrimButtonInteraction(interaction: ButtonInteractio
       await interaction.reply({ content: "Invalid scrim duration action.", ephemeral: true });
       return true;
     }
-    if (!(await ensureLeader(interaction, durationTeamId))) return true;
+    const managedTeamId = await resolveManagedTeamId(interaction, durationTeamId);
+    if (!managedTeamId) return true;
     try {
       await queueForScrim({
         guildId: interaction.guildId,
-        teamId: durationTeamId,
+        teamId: managedTeamId,
         requestedByDiscordUserId: interaction.user.id,
         durationMinutes: minutes,
       });
-      await refreshScrimPanel(interaction, durationTeamId);
+      await refreshScrimPanel(interaction, managedTeamId);
     } catch (error) {
       await interaction.reply({ content: error instanceof Error ? error.message : "Failed to start scrim queue.", ephemeral: true });
     }
@@ -178,15 +266,17 @@ export async function handleScrimButtonInteraction(interaction: ButtonInteractio
   }
 
   if (action === "cancel") {
-    if (!(await ensureLeader(interaction, teamId))) return true;
-    await cancelScrimSearch(interaction.guildId, teamId, interaction.user.id);
-    await refreshScrimPanel(interaction, teamId);
+    const managedTeamId = await resolveManagedTeamId(interaction, teamId);
+    if (!managedTeamId) return true;
+    await cancelScrimSearch(interaction.guildId, managedTeamId, interaction.user.id);
+    await refreshScrimPanel(interaction, managedTeamId);
     return true;
   }
 
   if (action === "set_code") {
-    if (!(await ensureLeader(interaction, teamId))) return true;
-    const modal = new ModalBuilder().setCustomId(`scrim:set_code_modal:${teamId}`).setTitle("Set Scrim Lobby Code");
+    const managedTeamId = await resolveManagedTeamId(interaction, teamId);
+    if (!managedTeamId) return true;
+    const modal = new ModalBuilder().setCustomId(`scrim:set_code_modal:${managedTeamId}`).setTitle("Set Scrim Lobby Code");
     const codeInput = new TextInputBuilder()
       .setCustomId("lobby_code")
       .setLabel("Private lobby code")
@@ -200,43 +290,48 @@ export async function handleScrimButtonInteraction(interaction: ButtonInteractio
   }
 
   if (action === "ready") {
-    if (!(await ensureLeader(interaction, teamId))) return true;
-    await markScrimReady(interaction.guildId, teamId);
-    await refreshScrimPanel(interaction, teamId);
+    const managedTeamId = await resolveManagedTeamId(interaction, teamId);
+    if (!managedTeamId) return true;
+    await markScrimReady(interaction.guildId, managedTeamId);
+    await refreshScrimPanel(interaction, managedTeamId);
     return true;
   }
 
   if (action === "leave") {
-    if (!(await ensureLeader(interaction, teamId))) return true;
-    await leaveOrCompleteScrim(interaction.guildId, teamId, false);
-    await refreshScrimPanel(interaction, teamId);
+    const managedTeamId = await resolveManagedTeamId(interaction, teamId);
+    if (!managedTeamId) return true;
+    await leaveOrCompleteScrim(interaction.guildId, managedTeamId, false);
+    await refreshScrimPanel(interaction, managedTeamId);
     return true;
   }
 
   if (action === "complete") {
-    if (!(await ensureLeader(interaction, teamId))) return true;
-    await leaveOrCompleteScrim(interaction.guildId, teamId, true);
-    await refreshScrimPanel(interaction, teamId);
+    const managedTeamId = await resolveManagedTeamId(interaction, teamId);
+    if (!managedTeamId) return true;
+    await leaveOrCompleteScrim(interaction.guildId, managedTeamId, true);
+    await refreshScrimPanel(interaction, managedTeamId);
     return true;
   }
 
   if (action === "requeue") {
-    if (!(await ensureLeader(interaction, teamId))) return true;
-    await queueForScrim({ guildId: interaction.guildId, teamId, requestedByDiscordUserId: interaction.user.id, durationMinutes: 60 });
-    await refreshScrimPanel(interaction, teamId);
+    const managedTeamId = await resolveManagedTeamId(interaction, teamId);
+    if (!managedTeamId) return true;
+    await queueForScrim({ guildId: interaction.guildId, teamId: managedTeamId, requestedByDiscordUserId: interaction.user.id, durationMinutes: 60 });
+    await refreshScrimPanel(interaction, managedTeamId);
     return true;
   }
 
   if (action === "rematch") {
-    const snapshot = await getScrimStateForTeam(interaction.guildId, teamId);
+    const managedTeamId = await resolveManagedTeamId(interaction, teamId);
+    if (!managedTeamId) return true;
+    const snapshot = await getScrimStateForTeam(interaction.guildId, managedTeamId);
     if (!snapshot.activeMatch) {
       await interaction.reply({ content: "No active match to reassign a map for.", ephemeral: true });
       return true;
     }
-    if (!(await ensureLeader(interaction, teamId))) return true;
     await adminReassignScrimMap(snapshot.activeMatch.id);
     await createAuditLog({ guildId: interaction.guildId, action: "SCRIM_MAP_REASSIGNED", entityType: "ScrimMatch", entityId: `${snapshot.activeMatch.id}`, summary: "Leader requested new scrim map.", actorDiscordUserId: interaction.user.id });
-    await refreshScrimPanel(interaction, teamId);
+    await refreshScrimPanel(interaction, managedTeamId);
     return true;
   }
 
@@ -282,11 +377,25 @@ export async function handleScrimModalInteraction(interaction: ModalSubmitIntera
   if (!interaction.customId.startsWith("scrim:set_code_modal:")) return false;
   if (!interaction.inCachedGuild()) return true;
 
-  const teamId = Number(interaction.customId.split(":")[2]);
-  if (!(await ensureLeader(interaction, teamId))) return true;
+  if (!interaction.deferred && !interaction.replied) {
+    await interaction.deferReply({ ephemeral: true });
+  }
 
-  const code = interaction.fields.getTextInputValue("lobby_code").trim();
-  await setScrimLobbyCode(interaction.guildId, teamId, code, interaction.user.id);
-  await refreshScrimPanel(interaction, teamId);
+  const teamId = Number(interaction.customId.split(":")[2]);
+  const managedTeamId = await resolveManagedTeamId(interaction, teamId);
+  if (!managedTeamId) return true;
+
+  try {
+    const code = interaction.fields.getTextInputValue("lobby_code").trim();
+    await setScrimLobbyCode(interaction.guildId, managedTeamId, code, interaction.user.id);
+    await refreshScrimPanel(interaction, managedTeamId);
+    await sendEphemeral(interaction, "Lobby code updated.");
+  } catch (error) {
+    await sendEphemeral(
+      interaction,
+      error instanceof Error ? error.message : "Failed to update lobby code."
+    );
+  }
+
   return true;
 }
