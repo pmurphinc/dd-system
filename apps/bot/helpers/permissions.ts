@@ -32,6 +32,11 @@ interface MemberAccessFlags {
   roleIds: Set<string>;
 }
 
+type SupportedInteraction =
+  | ButtonInteraction
+  | ModalSubmitInteraction
+  | StringSelectMenuInteraction;
+
 export interface TeamLeaderAccessDebug {
   hasTeamRole: boolean;
   hasBaseTeamLeaderRole: boolean;
@@ -40,6 +45,44 @@ export interface TeamLeaderAccessDebug {
   isRoleBasedLeader: boolean;
   isLeader: boolean;
   note: string | null;
+}
+
+type TeamPanelAccessReason =
+  | "admin_override"
+  | "missing_team_leader_role"
+  | "not_member_of_team"
+  | "not_team_leader"
+  | "allowed";
+
+export interface TeamPanelAccessResult {
+  allowed: boolean;
+  reason: TeamPanelAccessReason;
+  leaderAccess: TeamLeaderAccessDebug;
+}
+
+export function evaluateTeamPanelAccessDecision(params: {
+  isAdminOverride: boolean;
+  hasTeamLeaderRole: boolean;
+  isMemberOfExactTeam: boolean;
+  isLeader: boolean;
+}): { allowed: boolean; reason: TeamPanelAccessReason } {
+  if (params.isAdminOverride) {
+    return { allowed: true, reason: "admin_override" };
+  }
+
+  if (!params.hasTeamLeaderRole) {
+    return { allowed: false, reason: "missing_team_leader_role" };
+  }
+
+  if (!params.isMemberOfExactTeam) {
+    return { allowed: false, reason: "not_member_of_team" };
+  }
+
+  if (!params.isLeader) {
+    return { allowed: false, reason: "not_team_leader" };
+  }
+
+  return { allowed: true, reason: "allowed" };
 }
 
 interface CommandAccessPolicy {
@@ -378,6 +421,77 @@ export async function hasFounderInteractionAccess(
     interaction.member.roles
   );
   return memberAccess.isFounder;
+}
+
+function evaluateExactTeamMembership(
+  userId: string,
+  team: StoredTeam,
+  roleIds: Set<string>
+) {
+  const matchesStoredLeaderId =
+    Boolean(team.leaderDiscordUserId) && team.leaderDiscordUserId === userId;
+  const matchesRosterMemberId = team.members.some(
+    (member) => member.discordUserId === userId
+  );
+  const hasTeamRole = team.discordRoleId ? roleIds.has(team.discordRoleId) : false;
+
+  return matchesStoredLeaderId || matchesRosterMemberId || hasTeamRole;
+}
+
+export async function canManageTeamPanel(
+  interaction: SupportedInteraction,
+  team: StoredTeam
+): Promise<TeamPanelAccessResult> {
+  const leaderAccess = interaction.inCachedGuild()
+    ? await getTeamLeaderAccessDebug(
+        interaction.guildId,
+        interaction.member.roles,
+        team,
+        interaction.user.id
+      )
+    : {
+        hasTeamRole: false,
+        hasBaseTeamLeaderRole: false,
+        matchesStoredLeaderId: false,
+        matchesLeaderMemberId: false,
+        isRoleBasedLeader: false,
+        isLeader: false,
+        note: "This action can only be used in a server.",
+      };
+
+  if (!interaction.inCachedGuild()) {
+    return {
+      allowed: false,
+      reason: "not_member_of_team",
+      leaderAccess,
+    };
+  }
+
+  const roleIds = new Set(interaction.member.roles.cache.keys());
+  const isMemberOfExactTeam = evaluateExactTeamMembership(
+    interaction.user.id,
+    team,
+    roleIds
+  );
+  const decision = evaluateTeamPanelAccessDecision({
+    isAdminOverride: await hasAdminInteractionAccess(interaction),
+    hasTeamLeaderRole: leaderAccess.hasBaseTeamLeaderRole,
+    isMemberOfExactTeam,
+    isLeader: leaderAccess.isLeader,
+  });
+
+  return {
+    allowed: decision.allowed,
+    reason: decision.reason,
+    leaderAccess,
+  };
+}
+
+export async function canSubmitTeamCashoutPlacement(
+  interaction: SupportedInteraction,
+  team: StoredTeam
+): Promise<TeamPanelAccessResult> {
+  return canManageTeamPanel(interaction, team);
 }
 
 export async function hasTeamLeaderAccessForTeam(
