@@ -14,7 +14,7 @@ import {
   getTeamStageSubmissionStatusLabel,
 } from "../storage/reportSubmissions";
 import { getStandingsForTournamentInstance } from "../storage/standings";
-import { getTeamForUser } from "../storage/teams";
+import { getTeamById, getTeamForUser } from "../storage/teams";
 import {
   getTournamentInstanceById,
   syncTournamentInstancesForGuild,
@@ -64,11 +64,18 @@ function getFinalScoreLabel(score?: string | null): string {
 export async function buildTeamPanel(
   userId: string,
   guildId: string,
-  memberRoles?: GuildMemberRoleManager
+  memberRoles?: GuildMemberRoleManager,
+  options?: {
+    forcedTeamId?: number;
+    isAdminViewer?: boolean;
+  }
 ) {
   await syncTournamentInstancesForGuild(guildId);
 
-  const team = await getTeamForUser(userId, memberRoles);
+  const forcedTeamId = options?.forcedTeamId;
+  const team = forcedTeamId
+    ? await getTeamById(forcedTeamId)
+    : await getTeamForUser(userId, memberRoles);
 
   if (!team) {
     const embed = new EmbedBuilder()
@@ -226,7 +233,11 @@ export async function buildTeamPanel(
 
   const embed = new EmbedBuilder()
     .setTitle("Development Division Team Panel")
-    .setDescription(`Live status for ${team.teamName}.`)
+    .setDescription(
+      options?.isAdminViewer
+        ? `Admin view for ${team.teamName}.`
+        : `Live status for ${team.teamName}.`
+    )
     .addFields(fields);
 
   const rows: Array<ActionRowBuilder<ButtonBuilder>> = [];

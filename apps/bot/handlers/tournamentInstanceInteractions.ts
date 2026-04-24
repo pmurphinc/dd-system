@@ -1122,18 +1122,17 @@ export async function handleTournamentInstanceButton(
       interaction.guildId,
       interaction.member.roles
     );
-    await replaceOrEditPanelFromInteraction({
-      interaction,
-      scopeKey: buildPanelScopeKey("team", interaction.guildId, interaction.user.id),
-      panelType: "team",
-      panel,
-      metadata: {
-        ownerDiscordUserId: interaction.user.id,
-        actorDiscordUserId: interaction.user.id,
-        teamId: team.id,
-        tournamentInstanceId: team.tournamentInstanceId ?? undefined,
-      },
-    });
+    if (interaction.deferred || interaction.replied) {
+      await interaction.followUp({
+        ...panel,
+        flags: MessageFlags.Ephemeral,
+      });
+    } else {
+      await interaction.reply({
+        ...panel,
+        flags: MessageFlags.Ephemeral,
+      });
+    }
     return true;
   }
 

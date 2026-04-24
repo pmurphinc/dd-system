@@ -3,12 +3,13 @@ import { deleteTrackedPanelMessage, invalidateOldScopeMessages } from "./panelLi
 import { buildAdminPanel } from "../helpers/adminPanel";
 import { buildTeamPanel } from "../helpers/teamPanel";
 import { buildTournamentPanel } from "../helpers/tournamentPanel";
+import { evaluateTrackedTeamPanelChannelSafety } from "../helpers/teamPanelVisibility";
 import {
   findActivePanels,
   registerActivePanelMessage,
   removeActivePanelByMessage,
 } from "../storage/panelContext";
-import { getTeamForUser } from "../storage/teams";
+import { getTeamById, getTeamForUser } from "../storage/teams";
 import { onPanelDataChanged, PanelDataChangeEvent, PanelType } from "./panelRefreshBus";
 
 interface TrackedPanelMessage {
@@ -74,7 +75,9 @@ async function rebuildPanel(entry: TrackedPanelMessage) {
     throw new Error("Missing userId for team panel refresh.");
   }
 
-  return buildTeamPanel(entry.userId, entry.guildId);
+  return buildTeamPanel(entry.userId, entry.guildId, undefined, {
+    forcedTeamId: entry.teamId,
+  });
 }
 
 async function canRenderTrackedTeamPanel(entry: TrackedPanelMessage): Promise<boolean> {
@@ -113,6 +116,43 @@ async function updateTrackedPanel(entry: TrackedPanelMessage): Promise<void> {
     if (!channel || channel.type !== ChannelType.GuildText) {
       await removeActivePanelByMessage(entry.channelId, entry.messageId);
       return;
+    }
+
+    if (entry.panelType === "team") {
+      if (!entry.teamId) {
+        await removeActivePanelByMessage(entry.channelId, entry.messageId);
+        return;
+      }
+      const team = await getTeamById(entry.teamId);
+      if (!team) {
+        await deleteTrackedPanelMessage({
+          client: botClient,
+          channelId: entry.channelId,
+          messageId: entry.messageId,
+          scopeKey: entry.scopeKey,
+        });
+        return;
+      }
+      const channelSafety = evaluateTrackedTeamPanelChannelSafety(channel, team);
+      if (channelSafety.kind !== "correct_team_private_channel") {
+        console.warn(
+          "[panel-auto-update] skipped team panel refresh outside private team channel",
+          {
+            scopeKey: entry.scopeKey,
+            teamId: entry.teamId,
+            channelId: entry.channelId,
+            messageId: entry.messageId,
+            reason: channelSafety.kind,
+          }
+        );
+        await deleteTrackedPanelMessage({
+          client: botClient,
+          channelId: entry.channelId,
+          messageId: entry.messageId,
+          scopeKey: entry.scopeKey,
+        });
+        return;
+      }
     }
 
     const nextPanel = await resolveTrackedPanelOrNull(entry);
