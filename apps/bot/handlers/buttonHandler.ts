@@ -45,12 +45,16 @@ import {
 import {
   backfillApprovedImportedTeamMapBans,
   getPlacedTeams,
+  listImportedTeamsForTournamentInstance,
   getTeamBySubmissionId,
   getTeamForUser,
   importApprovedRegistrationToTeam,
   listImportedTeams,
   setTeamCheckInStatus,
 } from "../storage/teams";
+import { listTournamentInstancesForGuild } from "../storage/tournamentInstances";
+import { normalizeMapBan } from "../storage/tournamentMaps";
+import { getSevenCircleSheetMapBanSnapshot } from "../services/registrationSheetSync";
 import {
   getLatestPendingReportSubmission,
   getPendingReportSubmissions,
@@ -117,6 +121,10 @@ async function buildSubmissionPicker(status: "pending" | "approved" | "rejected"
 
 function formatTeamPlayers(players: string[]): string {
   return players.map((player) => `* ${player}`).join("\n");
+}
+
+function normalizeTeamDiagnosticKey(value: string): string {
+  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "");
 }
 
 async function runApprovalPipeline(

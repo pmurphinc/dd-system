@@ -54,6 +54,16 @@ interface RowValidationIssue {
   reason: string;
 }
 
+export interface SheetMapBanSnapshotRow {
+  teamName: string;
+  rowKey: string;
+  rowNumber: number;
+  rawMapBan: string;
+  parsedMapBan: string | null;
+  spreadsheetId: string;
+  worksheetTitle: string;
+}
+
 let syncIntervalHandle: NodeJS.Timeout | undefined;
 let pollInFlight = false;
 
@@ -562,6 +572,63 @@ async function fetchSheetValues(
 
   const body = (await response.json()) as { values?: string[][] };
   return body.values ?? [];
+}
+
+export async function getSevenCircleSheetMapBanSnapshot(): Promise<
+  SheetMapBanSnapshotRow[]
+> {
+  const config = getRegistrationSyncConfig();
+  const source = config.sources.find(
+    (candidate) => candidate.enabled && candidate.sourceKey === "7th-circle"
+  );
+
+  if (!source?.spreadsheetId) {
+    return [];
+  }
+
+  const accessToken = await getGoogleAccessToken(config);
+  const worksheetTitle =
+    source.worksheetTitle ??
+    (await fetchSpreadsheetMetadata(source.spreadsheetId, accessToken))[0]?.title;
+
+  if (!worksheetTitle) {
+    return [];
+  }
+
+  const values = await fetchSheetValues(
+    source,
+    source.spreadsheetId,
+    worksheetTitle,
+    buildWorksheetA1Range(worksheetTitle),
+    accessToken
+  );
+  const headers = values[0] ?? [];
+  const rows: SheetMapBanSnapshotRow[] = [];
+
+  for (let index = 1; index < values.length; index += 1) {
+    const row = values[index] ?? [];
+    const rowNumber = index + 1;
+    if (row.every((cell) => !cell?.trim())) {
+      continue;
+    }
+
+    try {
+      const parsed = normalizeRow(source, worksheetTitle, headers, row, rowNumber);
+      rows.push({
+        teamName: parsed.teamName,
+        rowKey: parsed.rowKey,
+        rowNumber: parsed.rowNumber,
+        rawMapBan: parsed.rawMapBan,
+        parsedMapBan: parsed.mapBan,
+        spreadsheetId: source.spreadsheetId,
+        worksheetTitle,
+      });
+    } catch {
+      continue;
+    }
+  }
+
+  return rows;
 }
 
 async function syncSource(
