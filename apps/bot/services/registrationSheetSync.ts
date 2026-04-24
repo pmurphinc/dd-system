@@ -145,7 +145,7 @@ export function isRegistrationSyncAuthConfigured(
 }
 
 function normalizeHeader(header: string): string {
-  return header.toLowerCase().replace(/[^a-z0-9]+/g, "");
+  return header.trim().toLowerCase().replace(/[^a-z0-9]+/g, "");
 }
 
 function readCell(row: string[], index: number | undefined): string {
@@ -225,6 +225,7 @@ function findTeamNameIndex(headers: string[]): number {
 
 function findMapBanIndex(headers: string[]): number {
   const prioritized = [
+    "teammapban",
     "mapban",
     "mapbanselection",
     "ban",
@@ -250,6 +251,24 @@ function findMapBanIndex(headers: string[]): number {
         normalized === "mapban")
   );
 }
+
+function getMapBanFallbackIndex(source: SheetSyncSourceConfig): number | undefined {
+  if (source.sourceKey === "dd_registration") {
+    return 6; // Column G
+  }
+
+  if (source.sourceKey === "7th-circle") {
+    return 10; // Column K
+  }
+
+  return undefined;
+}
+
+export const __registrationSheetSyncTestables = {
+  normalizeHeader,
+  findMapBanIndex,
+  getMapBanFallbackIndex,
+};
 
 function parseSubmittedAt(value: string): Date | null {
   const trimmed = value.trim();
@@ -296,9 +315,9 @@ function normalizeRow(
     (normalized) => normalized === "timestamp" || normalized.includes("submitted")
   );
   // Historically some source sheets changed the map-ban header text over time.
-  // Prefer known header aliases, then fall back to legacy Column G.
+  // Prefer known header aliases, then fall back to source-specific legacy columns.
   const mapBanHeaderIndex = findMapBanIndex(headers);
-  const mapBanIndex = mapBanHeaderIndex >= 0 ? mapBanHeaderIndex : 6;
+  const mapBanFallbackIndex = getMapBanFallbackIndex(source);
   const leaderDiscordIndex = findFirstIndex(
     headers,
     (normalized) =>
@@ -379,8 +398,29 @@ function normalizeRow(
     }));
 
   const rowKey = `${source.spreadsheetId}:${worksheetTitle}:${rowNumber}`;
-  const rawMapBan = readCell(row, mapBanIndex);
-  const normalizedMapBan = normalizeMapBan(rawMapBan);
+  const rawHeaderMapBan =
+    mapBanHeaderIndex >= 0 ? readCell(row, mapBanHeaderIndex) : "";
+  const normalizedHeaderMapBan = normalizeMapBan(rawHeaderMapBan);
+  const rawFallbackMapBan =
+    mapBanHeaderIndex < 0 && mapBanFallbackIndex !== undefined
+      ? readCell(row, mapBanFallbackIndex)
+      : "";
+  const normalizedFallbackMapBan = normalizeMapBan(rawFallbackMapBan);
+  const usingHeaderMapBan = mapBanHeaderIndex >= 0;
+  const usingFallbackMapBan = !usingHeaderMapBan && Boolean(normalizedFallbackMapBan);
+  const rawMapBan = usingHeaderMapBan
+    ? rawHeaderMapBan
+    : usingFallbackMapBan
+      ? rawFallbackMapBan
+      : "";
+  const normalizedMapBan = usingHeaderMapBan
+    ? normalizedHeaderMapBan
+    : normalizedFallbackMapBan;
+  const mapBanSourceLabel = usingHeaderMapBan
+    ? `Header "${headers[mapBanHeaderIndex]}"`
+    : mapBanFallbackIndex !== undefined
+      ? `Column ${String.fromCharCode(65 + mapBanFallbackIndex)}`
+      : "No supported map-ban source";
 
   return {
     rowKey,
@@ -399,7 +439,12 @@ function normalizeRow(
     mapBan: normalizedMapBan,
     submittedNotes: buildSubmittedNotes([
       rawMapBan
-        ? `Map Ban (${mapBanHeaderIndex >= 0 ? `Header "${headers[mapBanIndex]}"` : "Column G"}): ${rawMapBan}`
+        ? `Map Ban (${mapBanSourceLabel}): ${rawMapBan}`
+        : null,
+      !usingHeaderMapBan &&
+      rawFallbackMapBan &&
+      !normalizedFallbackMapBan
+        ? "Map Ban Validation: INVALID_FALLBACK_VALUE"
         : null,
       rawMapBan && !normalizedMapBan ? "Map Ban Validation: INVALID_VALUE" : null,
       !rawMapBan ? "Map Ban Validation: MISSING_VALUE" : null,
