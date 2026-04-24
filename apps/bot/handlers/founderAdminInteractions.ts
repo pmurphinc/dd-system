@@ -433,6 +433,10 @@ const menu = new StringSelectMenuBuilder()
 export async function handleFounderAdminSelectMenu(
   interaction: StringSelectMenuInteraction
 ): Promise<boolean> {
+  if (!interaction.customId.startsWith("admin:")) {
+    return false;
+  }
+
   if (!(await hasFounderInteractionAccess(interaction))) {
     await interaction.reply({
       content: "Only the Founder role can use this panel.",

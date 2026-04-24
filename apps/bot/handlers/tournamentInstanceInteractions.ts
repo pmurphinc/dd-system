@@ -24,7 +24,8 @@ import {
   buildTournamentPanel,
 } from "../helpers/tournamentPanel";
 import {
-  getTeamLeaderAccessDebug,
+  canManageTeamPanel,
+  canSubmitTeamCashoutPlacement,
   hasAdminInteractionAccess,
 } from "../helpers/permissions";
 import {
@@ -173,28 +174,6 @@ function getTeamActionAvailabilityKey(
 }
 
 
-function evaluateExactTeamMembership(
-  userId: string,
-  team: NonNullable<Awaited<ReturnType<typeof getTeamById>>>,
-  roleIds: Set<string>
-) {
-  const matchesStoredLeaderId =
-    Boolean(team.leaderDiscordUserId) && team.leaderDiscordUserId === userId;
-  const matchesRosterMemberId = team.members.some(
-    (member) => member.discordUserId === userId
-  );
-  const hasTeamRole = team.discordRoleId ? roleIds.has(team.discordRoleId) : false;
-  const isMemberOfExactTeam =
-    matchesStoredLeaderId || matchesRosterMemberId || hasTeamRole;
-
-  return {
-    matchesStoredLeaderId,
-    matchesRosterMemberId,
-    hasTeamRole,
-    isMemberOfExactTeam,
-  };
-}
-
 function logTeamAccessFailure(params: {
   reason: string;
   userId: string;
@@ -206,6 +185,16 @@ function logTeamAccessFailure(params: {
   isLeader: boolean;
 }) {
   console.warn("[team-button-access-denied]", params);
+}
+
+function logTeamCashoutPlacementDenied(params: {
+  guildId: string;
+  userId: string;
+  teamId: number;
+  customId: string;
+  reason: string;
+}) {
+  console.warn("[team-cashout-placement-denied]", params);
 }
 
 function formatStageSubmissionStatus(status: string): string {
@@ -1174,49 +1163,22 @@ export async function handleTournamentInstanceButton(
       return true;
     }
 
-    const membership = evaluateExactTeamMembership(
-      interaction.user.id,
-      team,
-      new Set(interaction.member.roles.cache.keys())
-    );
-    if (!membership.isMemberOfExactTeam) {
-      logTeamAccessFailure({
-        reason: "not_member_of_exact_team",
-        userId: interaction.user.id,
-        instanceId,
-        buttonTeamId: teamId,
-        targetTeamId: team.id,
-        targetTeamName: team.teamName,
-        isMemberOfExactTeam: membership.isMemberOfExactTeam,
-        isLeader: false,
-      });
+    const teamPanelAccess = await canManageTeamPanel(interaction, team);
+    if (!teamPanelAccess.allowed) {
+      if (action === "submit_cashout" || action === "edit_cashout") {
+        logTeamCashoutPlacementDenied({
+          guildId: interaction.guildId,
+          userId: interaction.user.id,
+          teamId: team.id,
+          customId: interaction.customId,
+          reason: teamPanelAccess.reason,
+        });
+      }
       await interaction.reply({
-        content: "You do not belong to this tournament team.",
-        flags: MessageFlags.Ephemeral,
-      });
-      return true;
-    }
-
-    const leaderAccess = await getTeamLeaderAccessDebug(
-      interaction.guildId,
-      interaction.member.roles,
-      team,
-      interaction.user.id
-    );
-
-    if (!leaderAccess.isLeader) {
-      logTeamAccessFailure({
-        reason: "not_leader_of_exact_team",
-        userId: interaction.user.id,
-        instanceId,
-        buttonTeamId: teamId,
-        targetTeamId: team.id,
-        targetTeamName: team.teamName,
-        isMemberOfExactTeam: membership.isMemberOfExactTeam,
-        isLeader: leaderAccess.isLeader,
-      });
-      await interaction.reply({
-        content: `Only the team leader can use this action. ${leaderAccess.note ?? ""}`.trim(),
+        content:
+          action === "submit_cashout" || action === "edit_cashout"
+            ? "Only this team's Team Leader can submit Cashout placement."
+            : "Only this team's Team Leader can use this action.",
         flags: MessageFlags.Ephemeral,
       });
       return true;
@@ -1247,7 +1209,7 @@ export async function handleTournamentInstanceButton(
       (row) => row.teamId === team.id || row.opponentTeamId === team.id
     );
     const availableTeamActions = getAvailableTeamPanelActions({
-      isLeader: leaderAccess.isLeader,
+      isLeader: true,
       hasInstance: Boolean(instance),
       teamBelongsToInstance: team.tournamentInstanceId === instanceId,
       isCheckInOpen: isCheckInOpen(instance),
@@ -2151,49 +2113,17 @@ export async function handleTournamentInstanceSelectMenu(
       return true;
     }
 
-    const membership = evaluateExactTeamMembership(
-      interaction.user.id,
-      team,
-      new Set(interaction.member.roles.cache.keys())
-    );
-    if (!membership.isMemberOfExactTeam) {
-      logTeamAccessFailure({
-        reason: "cashout_select_not_member",
+    const cashoutAccess = await canSubmitTeamCashoutPlacement(interaction, team);
+    if (!cashoutAccess.allowed) {
+      logTeamCashoutPlacementDenied({
+        guildId: interaction.guildId,
         userId: interaction.user.id,
-        instanceId,
-        buttonTeamId: teamId,
-        targetTeamId: team.id,
-        targetTeamName: team.teamName,
-        isMemberOfExactTeam: membership.isMemberOfExactTeam,
-        isLeader: false,
+        teamId: team.id,
+        customId: interaction.customId,
+        reason: cashoutAccess.reason,
       });
       await interaction.reply({
-        content: "You do not belong to this tournament team.",
-        flags: MessageFlags.Ephemeral,
-      });
-      return true;
-    }
-
-    const leaderAccess = await getTeamLeaderAccessDebug(
-      interaction.guildId,
-      interaction.member.roles,
-      team,
-      interaction.user.id
-    );
-
-    if (!leaderAccess.isLeader) {
-      logTeamAccessFailure({
-        reason: "cashout_select_not_leader",
-        userId: interaction.user.id,
-        instanceId,
-        buttonTeamId: teamId,
-        targetTeamId: team.id,
-        targetTeamName: team.teamName,
-        isMemberOfExactTeam: membership.isMemberOfExactTeam,
-        isLeader: leaderAccess.isLeader,
-      });
-      await interaction.reply({
-        content: "Only the team leader can submit results.",
+        content: "Only this team's Team Leader can submit Cashout placement.",
         flags: MessageFlags.Ephemeral,
       });
       return true;
@@ -2288,49 +2218,10 @@ export async function handleTournamentInstanceSelectMenu(
       return true;
     }
 
-    const membership = evaluateExactTeamMembership(
-      interaction.user.id,
-      team,
-      new Set(interaction.member.roles.cache.keys())
-    );
-    if (!membership.isMemberOfExactTeam) {
-      logTeamAccessFailure({
-        reason: "final_round_select_not_member",
-        userId: interaction.user.id,
-        instanceId,
-        buttonTeamId: teamId,
-        targetTeamId: team.id,
-        targetTeamName: team.teamName,
-        isMemberOfExactTeam: membership.isMemberOfExactTeam,
-        isLeader: false,
-      });
+    const teamPanelAccess = await canManageTeamPanel(interaction, team);
+    if (!teamPanelAccess.allowed) {
       await interaction.reply({
-        content: "You do not belong to this tournament team.",
-        flags: MessageFlags.Ephemeral,
-      });
-      return true;
-    }
-
-    const leaderAccess = await getTeamLeaderAccessDebug(
-      interaction.guildId,
-      interaction.member.roles,
-      team,
-      interaction.user.id
-    );
-
-    if (!leaderAccess.isLeader) {
-      logTeamAccessFailure({
-        reason: "final_round_select_not_leader",
-        userId: interaction.user.id,
-        instanceId,
-        buttonTeamId: teamId,
-        targetTeamId: team.id,
-        targetTeamName: team.teamName,
-        isMemberOfExactTeam: membership.isMemberOfExactTeam,
-        isLeader: leaderAccess.isLeader,
-      });
-      await interaction.reply({
-        content: "Only the team leader can submit results.",
+        content: "Only this team's Team Leader can use this action.",
         flags: MessageFlags.Ephemeral,
       });
       return true;
