@@ -12,7 +12,11 @@ import { buildMatchPanel } from "../helpers/matchPanel";
 import { hasAdminInteractionAccess } from "../helpers/permissions";
 import { buildReportPanel } from "../helpers/reportPanel";
 import { buildReportsPanel } from "../helpers/reportsPanel";
-import { buildReviewPanel, buildReviewQueue } from "../helpers/reviewPanel";
+import {
+  buildApprovedSetupRecoveryPanel,
+  buildReviewPanel,
+  buildReviewQueue,
+} from "../helpers/reviewPanel";
 import { buildTeamPanel } from "../helpers/teamPanel";
 import { buildTournamentPanel } from "../helpers/tournamentPanel";
 import {
@@ -805,7 +809,10 @@ export async function handleButtonInteraction(
     return;
   }
 
-  if (interaction.customId.startsWith("review_setup_")) {
+  if (
+    interaction.customId.startsWith("review_setup_") &&
+    interaction.customId !== "review_setup_approved_open"
+  ) {
     if (!interaction.inCachedGuild()) {
       await interaction.reply({
         content: "This action must be used inside the guild.",
@@ -851,6 +858,118 @@ export async function handleButtonInteraction(
           error instanceof Error
             ? error.message
             : "Discord setup failed.",
+        ephemeral: true,
+      });
+    }
+    return;
+  }
+
+  if (interaction.customId === "review_setup_approved_open") {
+    if (!interaction.guildId) {
+      await interaction.reply({
+        content: "This action must be used inside the guild.",
+        ephemeral: true,
+      });
+      return;
+    }
+
+    const recoveryPanel = await buildApprovedSetupRecoveryPanel({
+      guildId: interaction.guildId,
+    });
+
+    await interaction.reply({
+      ...recoveryPanel,
+      ephemeral: true,
+    });
+    return;
+  }
+
+  if (interaction.customId.startsWith("review_force_setup_")) {
+    if (!interaction.inCachedGuild()) {
+      await interaction.reply({
+        content: "This action must be used inside the guild.",
+        ephemeral: true,
+      });
+      return;
+    }
+
+    const submissionId = parseIdSuffix(interaction.customId, "review_force_setup_");
+    const submission = await getRegistrationById(submissionId);
+
+    if (!submission || submission.reviewStatus !== "approved") {
+      await interaction.reply({
+        content: "Approved submission not found for setup recovery.",
+        ephemeral: true,
+      });
+      return;
+    }
+
+    const team = await getTeamBySubmissionId(submissionId);
+
+    if (!team) {
+      await interaction.reply({
+        content: "Approved submission is not imported as a live team yet.",
+        ephemeral: true,
+      });
+      return;
+    }
+
+    try {
+      const setup = await ensureDiscordTeamSetup(
+        interaction.guild,
+        team,
+        interaction.user.id
+      );
+
+      const assigned = setup.memberAssignments.assigned;
+      const skipped = setup.memberAssignments.skipped;
+      const missingLinks = setup.memberAssignments.missingDiscordLinks;
+
+      await createAuditLog({
+        guildId: interaction.guildId,
+        action: "team_setup_forced_from_review",
+        entityType: "team",
+        entityId: `${team.id}`,
+        summary: `${interaction.user.id} forced setup for ${team.teamName}.`,
+        details:
+          `Submission ${submission.id}. ` +
+          `Role ${setup.teamRole.id} (${setup.roleAction}). ` +
+          `Channel ${setup.voiceChannel.id} (${setup.voiceAction}). ` +
+          `Assigned: ${assigned.length > 0 ? assigned.join(", ") : "none"}. ` +
+          `Skipped: ${
+            skipped.length > 0
+              ? skipped.map((entry) => `${entry.displayName} (${entry.reason})`).join(", ")
+              : "none"
+          }. ` +
+          `Missing links: ${missingLinks.length > 0 ? missingLinks.join(", ") : "none"}.`,
+        actorDiscordUserId: interaction.user.id,
+      });
+
+      await interaction.reply({
+        content:
+          `Force Discord Setup Complete\n\n` +
+          `Team: ${team.teamName}\n` +
+          `Role: <@&${setup.teamRole.id}> (${setup.roleAction})\n` +
+          `Channel: <#${setup.voiceChannel.id}> (${setup.voiceAction})\n\n` +
+          `Members assigned (${assigned.length}): ${
+            assigned.length > 0 ? assigned.join(", ") : "none"
+          }\n` +
+          `Members skipped (${skipped.length}): ${
+            skipped.length > 0
+              ? skipped.map((entry) => `${entry.displayName} (${entry.reason})`).join(", ")
+              : "none"
+          }\n` +
+          `Missing Discord links (${missingLinks.length}): ${
+            missingLinks.length > 0 ? missingLinks.join(", ") : "none"
+          }`,
+        ephemeral: true,
+      });
+    } catch (error) {
+      await interaction.reply({
+        content:
+          error instanceof Error
+            ? `Force Discord setup failed: ${error.message}`
+            : "Force Discord setup failed.",
         ephemeral: true,
       });
     }
