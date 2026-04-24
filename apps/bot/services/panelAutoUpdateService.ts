@@ -125,11 +125,13 @@ async function updateTrackedPanel(entry: TrackedPanelMessage): Promise<void> {
       });
       return;
     }
-    const replacement = await channel.send(nextPanel);
+
+    const message = await channel.messages.fetch(entry.messageId);
+    await message.edit(nextPanel);
     await registerActivePanelMessage({
       guildId: entry.guildId,
-      channelId: replacement.channelId,
-      messageId: replacement.id,
+      channelId: message.channelId,
+      messageId: message.id,
       panelType: entry.panelType,
       scopeKey: entry.scopeKey,
       ownerDiscordUserId: entry.userId,
@@ -137,24 +139,16 @@ async function updateTrackedPanel(entry: TrackedPanelMessage): Promise<void> {
       tournamentInstanceId: entry.tournamentInstanceId,
       teamId: entry.teamId,
     });
-
-    await deleteTrackedPanelMessage({
-      client: botClient,
-      channelId: entry.channelId,
-      messageId: entry.messageId,
-      scopeKey: entry.scopeKey,
-    });
     await invalidateOldScopeMessages({
       client: botClient,
       scopeKey: entry.scopeKey,
-      keepMessageId: replacement.id,
+      keepMessageId: message.id,
     });
 
-    console.debug("[panel-auto-update] panel reposted", {
+    console.debug("[panel-auto-update] panel edited in-place", {
       panelType: entry.panelType,
       scopeKey: entry.scopeKey,
-      oldMessageId: entry.messageId,
-      replacementMessageId: replacement.id,
+      messageId: entry.messageId,
     });
   } catch (error) {
     if (isMessageMissingError(error)) {

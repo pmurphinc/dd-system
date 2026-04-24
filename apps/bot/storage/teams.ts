@@ -836,6 +836,26 @@ export async function updateTeamDiscordAssets(
 ): Promise<StoredTeam | null> {
   await ensureTeamTables();
 
+  const existing = await prisma.team.findUnique({
+    where: { id: teamId },
+    include: {
+      members: {
+        orderBy: { sortOrder: "asc" },
+      },
+    },
+  });
+
+  if (!existing) {
+    return null;
+  }
+
+  if (
+    (existing.discordRoleId ?? null) === roleId &&
+    (existing.voiceChannelId ?? null) === voiceChannelId
+  ) {
+    return mapTeam(existing);
+  }
+
   const updated = await prisma.team.update({
     where: { id: teamId },
     data: {

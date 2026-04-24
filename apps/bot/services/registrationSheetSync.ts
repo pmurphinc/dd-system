@@ -1,5 +1,5 @@
 import { createSign } from "crypto";
-import { Client, Guild } from "discord.js";
+import { ChannelType, Client, Guild } from "discord.js";
 import {
   syncRegistrationSubmissionFromSourceRow,
   RegistrationPlayerInput,
@@ -15,6 +15,7 @@ import {
 import { ensureDiscordTeamSetup } from "./discordTeamSetup";
 import { getTeamBySubmissionId, syncImportedTeamFromSubmission } from "../storage/teams";
 import { normalizeMapBan } from "../storage/tournamentMaps";
+import { findActivePanels } from "../storage/panelContext";
 
 interface SheetSyncSourceConfig {
   sourceKey: string;
@@ -609,6 +610,7 @@ async function syncSource(
     let rolesRenamed = 0;
     let channelsCreated = 0;
     let channelsRenamed = 0;
+    const newlyImportedTeamNames: string[] = [];
 
     for (let index = 1; index < values.length; index += 1) {
       const row = values[index] ?? [];
@@ -676,6 +678,7 @@ async function syncSource(
 
         if (result.created) {
           imported += 1;
+          newlyImportedTeamNames.push(normalized.teamName);
         }
 
         const teamBeforeSync = await getTeamBySubmissionId(result.submission.id);
@@ -796,6 +799,15 @@ async function syncSource(
         "instance_assignments_changed=0",
       ].join(" "),
     });
+
+    if (imported > 0 && guild) {
+      await notifyAdminsOfImportedRegistrations({
+        guild,
+        sourceLabel: source.sourceLabel,
+        importedCount: imported,
+        teamNames: newlyImportedTeamNames,
+      });
+    }
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Unknown Google Sheets sync error.";
@@ -822,6 +834,66 @@ async function syncSource(
     });
     console.error(`[registration-sync] ${source.sourceLabel}: ${message}`);
   }
+}
+
+function getConfiguredAdminNotificationChannelId(): string | null {
+  return (
+    process.env.ADMIN_STAFF_CHANNEL_ID?.trim() ||
+    process.env.ADMIN_CHANNEL_ID?.trim() ||
+    process.env.STAFF_CHANNEL_ID?.trim() ||
+    null
+  );
+}
+
+async function resolveAdminNotificationChannelId(guild: Guild): Promise<string | null> {
+  const configured = getConfiguredAdminNotificationChannelId();
+  if (configured) {
+    return configured;
+  }
+
+  const trackedAdminPanels = await findActivePanels({
+    guildId: guild.id,
+    panelType: "admin",
+  });
+
+  return trackedAdminPanels[0]?.channelId ?? null;
+}
+
+async function notifyAdminsOfImportedRegistrations(input: {
+  guild: Guild;
+  sourceLabel: string;
+  importedCount: number;
+  teamNames: string[];
+}): Promise<void> {
+  const channelId = await resolveAdminNotificationChannelId(input.guild);
+
+  if (!channelId) {
+    console.debug(
+      "[registration-sync] imported registrations detected but no admin/staff channel is configured."
+    );
+    return;
+  }
+
+  const channel = await input.guild.channels.fetch(channelId).catch(() => null);
+  if (!channel || channel.type !== ChannelType.GuildText) {
+    console.debug("[registration-sync] configured admin/staff channel is not a guild text channel.", {
+      channelId,
+    });
+    return;
+  }
+
+  const teamPreview = input.teamNames.slice(0, 5).join(", ");
+  const overflowCount = Math.max(input.teamNames.length - 5, 0);
+  const overflowSuffix = overflowCount > 0 ? ` (+${overflowCount} more)` : "";
+
+  await channel.send(
+    [
+      `📥 Imported ${input.importedCount} new registration submission${input.importedCount === 1 ? "" : "s"} from **${input.sourceLabel}**.`,
+      teamPreview ? `Teams: ${teamPreview}${overflowSuffix}` : null,
+    ]
+      .filter(Boolean)
+      .join("\n")
+  );
 }
 
 export async function pollRegistrationSheetsOnce(client?: Client): Promise<void> {
