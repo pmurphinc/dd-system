@@ -43,6 +43,7 @@ import {
   updateRegistrationStatus,
 } from "../storage/registrations";
 import {
+  backfillApprovedImportedTeamMapBans,
   getPlacedTeams,
   getTeamBySubmissionId,
   getTeamForUser,
@@ -973,6 +974,29 @@ export async function handleButtonInteraction(
         ephemeral: true,
       });
     }
+    return;
+  }
+
+  if (interaction.customId === "review_backfill_map_bans") {
+    if (!(await hasAdminInteractionAccess(interaction))) {
+      await interaction.reply({
+        content: "You do not have permission to use this action.",
+        ephemeral: true,
+      });
+      return;
+    }
+
+    const result = await backfillApprovedImportedTeamMapBans(interaction.user.id);
+
+    await interaction.reply({
+      content:
+        `Map-ban backfill complete.\n` +
+        `Scanned approved teams: ${result.scannedApprovedTeams}\n` +
+        `Team map bans backfilled: ${result.backfilledTeamMapBans}\n` +
+        `Used normalized-name fallback: ${result.usedNameFallbackCount}\n` +
+        `Unchanged: ${result.unchanged}`,
+      ephemeral: true,
+    });
     return;
   }
 

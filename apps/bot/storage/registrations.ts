@@ -431,6 +431,7 @@ export async function syncRegistrationSubmissionFromSourceRow(input: {
   players: RegistrationPlayerInput[];
   actorDiscordUserId: string;
   actorDisplayName: string;
+  allowMapBanOverwrite?: boolean;
 }): Promise<{
   submission: StoredRegistrationSubmission;
   created: boolean;
@@ -483,7 +484,10 @@ export async function syncRegistrationSubmissionFromSourceRow(input: {
     teamNameChanged ||
     communityChanged ||
     existing.sourceRowNumber !== input.sourceRowNumber ||
-    existing.mapBan !== (input.mapBan ?? null) ||
+    (existing.mapBan ?? null) !==
+      (input.allowMapBanOverwrite
+        ? (input.mapBan ?? null)
+        : (existing.mapBan ?? input.mapBan ?? null)) ||
     existing.submittedNotes !== input.submittedNotes ||
     existing.sourceWorksheetTitle !== input.sourceWorksheetTitle ||
     existing.sourceSpreadsheetId !== input.sourceSpreadsheetId ||
@@ -527,6 +531,9 @@ export async function syncRegistrationSubmissionFromSourceRow(input: {
   }
 
   const now = new Date();
+  const resolvedMapBan = input.allowMapBanOverwrite
+    ? (input.mapBan ?? null)
+    : (existing.mapBan ?? input.mapBan ?? null);
   const updated = await prisma.$transaction(async (tx: any) => {
     const submission = await tx.registrationSubmission.update({
       where: { id: existing.id },
@@ -540,7 +547,7 @@ export async function syncRegistrationSubmissionFromSourceRow(input: {
         sourceWorksheetTitle: input.sourceWorksheetTitle,
         sourceRowNumber: input.sourceRowNumber,
         originalSubmittedAt: input.originalSubmittedAt,
-        mapBan: input.mapBan ?? null,
+        mapBan: resolvedMapBan,
         syncImportedAt: now,
         submittedNotes: input.submittedNotes,
         updatedAt: now,
