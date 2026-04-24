@@ -54,6 +54,16 @@ interface RowValidationIssue {
   reason: string;
 }
 
+export interface SheetMapBanSnapshotRow {
+  teamName: string;
+  rowKey: string;
+  rowNumber: number;
+  rawMapBan: string;
+  parsedMapBan: string | null;
+  spreadsheetId: string;
+  worksheetTitle: string;
+}
+
 let syncIntervalHandle: NodeJS.Timeout | undefined;
 let pollInFlight = false;
 
@@ -213,6 +223,34 @@ function findTeamNameIndex(headers: string[]): number {
   );
 }
 
+function findMapBanIndex(headers: string[]): number {
+  const prioritized = [
+    "mapban",
+    "mapbanselection",
+    "ban",
+    "selectedmapban",
+    "cashoutmapban",
+  ];
+
+  for (const header of prioritized) {
+    const index = findFirstIndex(headers, (normalized) => normalized === header);
+    if (index >= 0) {
+      return index;
+    }
+  }
+
+  return findFirstIndex(
+    headers,
+    (normalized) =>
+      normalized.includes("map") &&
+      normalized.includes("ban") &&
+      (normalized.includes("selection") ||
+        normalized.includes("selected") ||
+        normalized.includes("cashout") ||
+        normalized === "mapban")
+  );
+}
+
 function parseSubmittedAt(value: string): Date | null {
   const trimmed = value.trim();
 
@@ -257,9 +295,10 @@ function normalizeRow(
     headers,
     (normalized) => normalized === "timestamp" || normalized.includes("submitted")
   );
-  // Google Form responses source-of-truth: Column G (0-indexed 6) contains the team map ban.
-  // For the standard registration sync flow, this is hard-pinned and not inferred from headers.
-  const mapBanIndex = 6;
+  // Historically some source sheets changed the map-ban header text over time.
+  // Prefer known header aliases, then fall back to legacy Column G.
+  const mapBanHeaderIndex = findMapBanIndex(headers);
+  const mapBanIndex = mapBanHeaderIndex >= 0 ? mapBanHeaderIndex : 6;
   const leaderDiscordIndex = findFirstIndex(
     headers,
     (normalized) =>
@@ -359,7 +398,9 @@ function normalizeRow(
     rawMapBan,
     mapBan: normalizedMapBan,
     submittedNotes: buildSubmittedNotes([
-      rawMapBan ? `Map Ban (Column G): ${rawMapBan}` : null,
+      rawMapBan
+        ? `Map Ban (${mapBanHeaderIndex >= 0 ? `Header "${headers[mapBanIndex]}"` : "Column G"}): ${rawMapBan}`
+        : null,
       rawMapBan && !normalizedMapBan ? "Map Ban Validation: INVALID_VALUE" : null,
       !rawMapBan ? "Map Ban Validation: MISSING_VALUE" : null,
       `Synced from ${source.sourceLabel} row ${rowNumber}.`,
@@ -373,7 +414,7 @@ function getRowValidationIssues(row: NormalizedSheetRow): RowValidationIssue[] {
   if (!row.mapBan) {
     issues.push({
       severity: "warning",
-      reason: "Missing or invalid map ban from Google Form column G.",
+      reason: "Missing or invalid map ban from Google Form row data.",
     });
   }
 
@@ -533,6 +574,63 @@ async function fetchSheetValues(
   return body.values ?? [];
 }
 
+export async function getSevenCircleSheetMapBanSnapshot(): Promise<
+  SheetMapBanSnapshotRow[]
+> {
+  const config = getRegistrationSyncConfig();
+  const source = config.sources.find(
+    (candidate) => candidate.enabled && candidate.sourceKey === "7th-circle"
+  );
+
+  if (!source?.spreadsheetId) {
+    return [];
+  }
+
+  const accessToken = await getGoogleAccessToken(config);
+  const worksheetTitle =
+    source.worksheetTitle ??
+    (await fetchSpreadsheetMetadata(source.spreadsheetId, accessToken))[0]?.title;
+
+  if (!worksheetTitle) {
+    return [];
+  }
+
+  const values = await fetchSheetValues(
+    source,
+    source.spreadsheetId,
+    worksheetTitle,
+    buildWorksheetA1Range(worksheetTitle),
+    accessToken
+  );
+  const headers = values[0] ?? [];
+  const rows: SheetMapBanSnapshotRow[] = [];
+
+  for (let index = 1; index < values.length; index += 1) {
+    const row = values[index] ?? [];
+    const rowNumber = index + 1;
+    if (row.every((cell) => !cell?.trim())) {
+      continue;
+    }
+
+    try {
+      const parsed = normalizeRow(source, worksheetTitle, headers, row, rowNumber);
+      rows.push({
+        teamName: parsed.teamName,
+        rowKey: parsed.rowKey,
+        rowNumber: parsed.rowNumber,
+        rawMapBan: parsed.rawMapBan,
+        parsedMapBan: parsed.mapBan,
+        spreadsheetId: source.spreadsheetId,
+        worksheetTitle,
+      });
+    } catch {
+      continue;
+    }
+  }
+
+  return rows;
+}
+
 async function syncSource(
   source: SheetSyncSourceConfig,
   accessToken: string,
@@ -653,7 +751,7 @@ async function syncSource(
           originalSubmittedAt: normalized.originalSubmittedAt,
           mapBan: normalized.mapBan,
           submittedNotes: submittedNotesWithWarnings,
-          actorDiscordUserId: "google-sheets-sync",
+          actorDiscordUserId: "sheet-sync",
           actorDisplayName: "Google Sheets Sync",
           players: normalized.players,
         });
@@ -684,7 +782,7 @@ async function syncSource(
         const teamBeforeSync = await getTeamBySubmissionId(result.submission.id);
         const teamSync = await syncImportedTeamFromSubmission(
           result.submission,
-          "google-sheets-sync"
+          "sheet-sync"
         );
         const teamAfterSync = teamSync.team ?? (await getTeamBySubmissionId(result.submission.id));
         const teamMapBanUpdated =
@@ -708,24 +806,31 @@ async function syncSource(
             guild &&
             result.submission.reviewStatus === "approved"
           ) {
-            const setup = await ensureDiscordTeamSetup(
-              guild,
-              teamSync.team,
-              "google-sheets-sync",
-              teamSync.previousTeamName
-            );
-            if (setup.roleAction === "created") rolesCreated += 1;
-            if (setup.roleAction === "renamed") rolesRenamed += 1;
-            if (setup.voiceAction === "created") channelsCreated += 1;
-            if (setup.voiceAction === "renamed") channelsRenamed += 1;
+            if (teamSync.discordAssetsMayNeedSync) {
+              const setup = await ensureDiscordTeamSetup(
+                guild,
+                teamSync.team,
+                "sheet-sync",
+                teamSync.previousTeamName
+              );
+              if (setup.roleAction === "created") rolesCreated += 1;
+              if (setup.roleAction === "renamed") rolesRenamed += 1;
+              if (setup.voiceAction === "created") channelsCreated += 1;
+              if (setup.voiceAction === "renamed") channelsRenamed += 1;
+            }
           }
         } else {
           const team = teamSync.team ?? (await getTeamBySubmissionId(result.submission.id));
-          if (team && guild && result.submission.reviewStatus === "approved") {
+          if (
+            team &&
+            guild &&
+            result.submission.reviewStatus === "approved" &&
+            teamSync.discordAssetsMayNeedSync
+          ) {
             const setup = await ensureDiscordTeamSetup(
               guild,
               team,
-              "google-sheets-sync"
+              "sheet-sync"
             );
             if (setup.roleAction === "created") rolesCreated += 1;
             if (setup.voiceAction === "created") channelsCreated += 1;

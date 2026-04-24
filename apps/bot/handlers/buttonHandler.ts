@@ -43,13 +43,18 @@ import {
   updateRegistrationStatus,
 } from "../storage/registrations";
 import {
+  backfillApprovedImportedTeamMapBans,
   getPlacedTeams,
+  listImportedTeamsForTournamentInstance,
   getTeamBySubmissionId,
   getTeamForUser,
   importApprovedRegistrationToTeam,
   listImportedTeams,
   setTeamCheckInStatus,
 } from "../storage/teams";
+import { listTournamentInstancesForGuild } from "../storage/tournamentInstances";
+import { normalizeMapBan } from "../storage/tournamentMaps";
+import { getSevenCircleSheetMapBanSnapshot } from "../services/registrationSheetSync";
 import {
   getLatestPendingReportSubmission,
   getPendingReportSubmissions,
@@ -116,6 +121,10 @@ async function buildSubmissionPicker(status: "pending" | "approved" | "rejected"
 
 function formatTeamPlayers(players: string[]): string {
   return players.map((player) => `* ${player}`).join("\n");
+}
+
+function normalizeTeamDiagnosticKey(value: string): string {
+  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "");
 }
 
 async function runApprovalPipeline(
@@ -973,6 +982,141 @@ export async function handleButtonInteraction(
         ephemeral: true,
       });
     }
+    return;
+  }
+
+  if (interaction.customId === "review_backfill_map_bans") {
+    if (!(await hasAdminInteractionAccess(interaction))) {
+      await interaction.reply({
+        content: "You do not have permission to use this action.",
+        ephemeral: true,
+      });
+      return;
+    }
+
+    const result = await backfillApprovedImportedTeamMapBans(interaction.user.id);
+
+    await interaction.reply({
+      content:
+        `Map-ban backfill complete.\n` +
+        `Scanned approved teams: ${result.scannedApprovedTeams}\n` +
+        `Team map bans backfilled: ${result.backfilledTeamMapBans}\n` +
+        `Used normalized-name fallback: ${result.usedNameFallbackCount}\n` +
+        `Unchanged: ${result.unchanged}`,
+      ephemeral: true,
+    });
+    return;
+  }
+
+  if (interaction.customId === "review_diag_map_bans_7c") {
+    if (!(await hasAdminInteractionAccess(interaction))) {
+      await interaction.reply({
+        content: "You do not have permission to use this action.",
+        ephemeral: true,
+      });
+      return;
+    }
+
+    if (!interaction.guildId) {
+      await interaction.reply({
+        content: "This action must be used inside the guild.",
+        ephemeral: true,
+      });
+      return;
+    }
+
+    const focusNames = ["#BuffWinch", "Opium label", "ULTIMATE", "TheNobodys"];
+    const sheetRows = await getSevenCircleSheetMapBanSnapshot().catch(() => []);
+    const sheetMap = new Map(
+      sheetRows.map((row) => [normalizeTeamDiagnosticKey(row.teamName), row] as const)
+    );
+
+    const instances = await listTournamentInstancesForGuild(interaction.guildId);
+    const active7CInstance =
+      instances.find((instance) =>
+        normalizeTeamDiagnosticKey(
+          `${instance.name} ${instance.orgName ?? ""} ${instance.displayName ?? ""} ${instance.internalKey ?? ""}`
+        ).includes("7c")
+      ) ??
+      instances.find((instance) =>
+        normalizeTeamDiagnosticKey(
+          `${instance.name} ${instance.orgName ?? ""} ${instance.displayName ?? ""} ${instance.internalKey ?? ""}`
+        ).includes("7thcircle")
+      ) ??
+      instances[0] ??
+      null;
+    const panelTeams = active7CInstance
+      ? await listImportedTeamsForTournamentInstance(active7CInstance.id)
+      : [];
+    const panelTeamById = new Map(panelTeams.map((team) => [team.id, team] as const));
+
+    const allImported = await listImportedTeams();
+    const candidateTeams = allImported.filter((team) => {
+      const key = normalizeTeamDiagnosticKey(team.teamName);
+      return (
+        focusNames.some((focus) => normalizeTeamDiagnosticKey(focus) === key) ||
+        sheetMap.has(key) ||
+        key.includes("buffwinch") ||
+        key.includes("opiumlabel") ||
+        key.includes("ultimate") ||
+        key.includes("thenobodys")
+      );
+    });
+
+    const lines: string[] = [];
+    for (const team of candidateTeams.sort((a, b) => a.teamName.localeCompare(b.teamName))) {
+      const submission = team.importedFromSubmissionId
+        ? await getRegistrationById(team.importedFromSubmissionId)
+        : null;
+      const sheetRow = sheetMap.get(normalizeTeamDiagnosticKey(team.teamName));
+      const panelTeam = panelTeamById.get(team.id);
+      const panelValue = panelTeam ? normalizeMapBan(panelTeam.mapBan) ?? "Missing" : "Not in active panel instance";
+      const isAssignedToActive = Boolean(
+        active7CInstance && team.tournamentInstanceId === active7CInstance.id
+      );
+      const wouldBackfillScan =
+        Boolean(submission) &&
+        submission?.reviewStatus === "approved" &&
+        !team.mapBan &&
+        Boolean(submission.mapBan);
+
+      lines.push(
+        [
+          `team=${team.teamName}`,
+          `teamId=${team.id}`,
+          `instanceId=${team.tournamentInstanceId ?? "null"}`,
+          `active7CInstanceId=${active7CInstance?.id ?? "none"}`,
+          `submissionId=${submission?.id ?? "null"}`,
+          `registrationStatus=${submission?.reviewStatus ?? "none"}`,
+          `sheetParsedMapBan=${sheetRow?.parsedMapBan ?? "null"}`,
+          `submissionMapBan=${submission?.mapBan ?? "null"}`,
+          `teamMapBan=${team.mapBan ?? "null"}`,
+          `panelValue=${panelValue}`,
+          `assignedToActive7C=${isAssignedToActive}`,
+          `backfillWouldScan=${wouldBackfillScan}`,
+        ].join(" | ")
+      );
+    }
+
+    console.log(
+      `[7c-map-ban-diagnostic] guild=${interaction.guildId} activeInstance=${active7CInstance?.id ?? "none"} rows=\n${lines.join("\n")}`
+    );
+
+    const responseLines = lines.slice(0, 10);
+    await interaction.reply({
+      content:
+        `7C map-ban diagnostic complete (admin-only).\n` +
+        `Active 7C instance candidate: ${active7CInstance?.id ?? "none"}\n` +
+        `Sheet rows parsed: ${sheetRows.length}\n` +
+        `Teams compared: ${lines.length}\n\n` +
+        "```" +
+        `${responseLines.join("\n") || "No matching teams found."}` +
+        "```" +
+        (lines.length > responseLines.length
+          ? `\n(Showing first ${responseLines.length}/${lines.length}; full details logged to console.)`
+          : ""),
+      ephemeral: true,
+    });
     return;
   }
 
