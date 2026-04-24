@@ -8,7 +8,10 @@ import {
   TextInputStyle,
 } from "discord.js";
 import { hasAdminInteractionAccess } from "../helpers/permissions";
-import { buildReviewPanel } from "../helpers/reviewPanel";
+import {
+  buildApprovedSetupRecoveryPanel,
+  buildReviewPanel,
+} from "../helpers/reviewPanel";
 import { buildTournamentPanel } from "../helpers/tournamentPanel";
 import { getMatchAssignmentById } from "../domain/reportAssignment";
 import { setTeamPlacement, getTeamById } from "../storage/teams";
@@ -90,6 +93,35 @@ export async function handleSelectMenuInteraction(
 
     await interaction.reply({
       ...reviewPanel,
+      ephemeral: true,
+    });
+    return;
+  }
+
+  if (interaction.customId === "review_select_setup_approved") {
+    if (!(await hasAdminInteractionAccess(interaction))) {
+      await interaction.reply({
+        content: "You do not have permission to use this action.",
+        ephemeral: true,
+      });
+      return;
+    }
+
+    if (!interaction.guildId) {
+      await interaction.reply({
+        content: "This action must be used inside the guild.",
+        ephemeral: true,
+      });
+      return;
+    }
+
+    const panel = await buildApprovedSetupRecoveryPanel({
+      guildId: interaction.guildId,
+      selectedSubmissionId: Number(interaction.values[0]),
+    });
+
+    await interaction.reply({
+      ...panel,
       ephemeral: true,
     });
     return;

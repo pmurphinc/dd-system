@@ -11,6 +11,8 @@ import {
   RegistrationStatus,
   StoredRegistrationSubmission,
 } from "../storage/registrations";
+import { getTeamBySubmissionId } from "../storage/teams";
+import { getTournamentInstanceById } from "../storage/tournamentInstances";
 
 function truncateValue(value: string, fallback = "-"): string {
   const trimmed = value.trim();
@@ -192,13 +194,152 @@ export async function buildReviewQueue(
         .setLabel("Rejected")
         .setStyle(
           statusFilter === "rejected" ? ButtonStyle.Primary : ButtonStyle.Secondary
-        )
+        ),
+      new ButtonBuilder()
+        .setCustomId("review_setup_approved_open")
+        .setLabel("Approved Teams")
+        .setStyle(ButtonStyle.Secondary)
     )
   );
 
   return {
     embeds: [embed],
     components,
+  };
+}
+
+interface BuildApprovedSetupRecoveryOptions {
+  guildId: string;
+  selectedSubmissionId?: number;
+}
+
+export async function buildApprovedSetupRecoveryPanel(
+  options: BuildApprovedSetupRecoveryOptions
+) {
+  const approvedSubmissions = await listRegistrationsByStatus("approved", 100);
+  const scopedRows = await Promise.all(
+    approvedSubmissions.map(async (submission) => {
+      if (!submission.importedTeamId) {
+        return null;
+      }
+
+      const team = await getTeamBySubmissionId(submission.id);
+
+      if (!team) {
+        return null;
+      }
+
+      if (team.tournamentInstanceId !== null) {
+        const instance = await getTournamentInstanceById(team.tournamentInstanceId);
+
+        if (!instance || instance.guildId !== options.guildId) {
+          return null;
+        }
+      }
+
+      return {
+        submission,
+        team,
+      };
+    })
+  );
+
+  const scopedTeams = scopedRows.filter((row) => row !== null);
+
+  if (scopedTeams.length === 0) {
+    return {
+      embeds: [
+        new EmbedBuilder()
+          .setTitle("Approved Team Setup Recovery")
+          .setDescription(
+            "No approved imported teams are available for this guild."
+          )
+          .setFooter({ text: "0 approved teams" }),
+      ],
+      components: [
+        new ActionRowBuilder<ButtonBuilder>().addComponents(
+          new ButtonBuilder()
+            .setCustomId("review_queue_pending")
+            .setLabel("Back to Review")
+            .setStyle(ButtonStyle.Secondary)
+        )
+      ],
+    };
+  }
+
+  const selected =
+    (options.selectedSubmissionId
+      ? scopedTeams.find((entry) => entry.submission.id === options.selectedSubmissionId)
+      : undefined) ?? scopedTeams[0];
+
+  const select = new StringSelectMenuBuilder()
+    .setCustomId("review_select_setup_approved")
+    .setPlaceholder("Select an approved team")
+    .addOptions(
+      scopedTeams.map((entry) => ({
+        label: entry.submission.teamName.slice(0, 100),
+        description: `Role ${entry.team.discordRoleId ? "linked" : "missing"} | Voice ${entry.team.voiceChannelId ? "linked" : "missing"}`.slice(
+          0,
+          100
+        ),
+        value: `${entry.submission.id}`,
+      }))
+    );
+
+  const embed = new EmbedBuilder()
+    .setTitle("Approved Team Setup Recovery")
+    .setDescription("Select an approved team and force Discord setup repair.")
+    .addFields(
+      {
+        name: "Submission ID",
+        value: `${selected.submission.id}`,
+        inline: true,
+      },
+      {
+        name: "Team Name",
+        value: selected.submission.teamName,
+        inline: true,
+      },
+      {
+        name: "Team ID",
+        value: `${selected.team.id}`,
+        inline: true,
+      },
+      {
+        name: "Role Asset",
+        value: selected.team.discordRoleId ? `<@&${selected.team.discordRoleId}>` : "Not linked",
+        inline: false,
+      },
+      {
+        name: "Voice Asset",
+        value: selected.team.voiceChannelId
+          ? `<#${selected.team.voiceChannelId}>`
+          : "Not linked",
+        inline: false,
+      },
+      {
+        name: "Discord Community",
+        value: getDiscordCommunityLabel(selected.submission),
+        inline: false,
+      }
+    )
+    .setFooter({ text: `${scopedTeams.length} approved team${scopedTeams.length === 1 ? "" : "s"}` });
+
+  return {
+    embeds: [embed],
+    components: [
+      new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(select),
+      new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`review_force_setup_${selected.submission.id}`)
+          .setLabel("Force Discord Setup")
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId("review_queue_pending")
+          .setLabel("Back to Review")
+          .setStyle(ButtonStyle.Secondary)
+      ),
+    ],
   };
 }
 

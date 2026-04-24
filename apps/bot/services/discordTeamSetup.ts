@@ -26,6 +26,14 @@ export interface TeamSetupResult {
   roleAction: "created" | "reused" | "renamed";
   voiceAction: "created" | "reused" | "renamed";
   players: string[];
+  memberAssignments: {
+    assigned: string[];
+    skipped: Array<{
+      displayName: string;
+      reason: string;
+    }>;
+    missingDiscordLinks: string[];
+  };
 }
 
 function getEnvRoleId(name: string): string | undefined {
@@ -335,11 +343,75 @@ export async function ensureDiscordTeamSetup(
     (member) => member.displayName
   );
 
+  const assigned: string[] = [];
+  const skipped: Array<{ displayName: string; reason: string }> = [];
+  const missingDiscordLinks: string[] = [];
+
+  for (const member of orderedMembers) {
+    const discordUserId = member.discordUserId?.trim();
+
+    if (!discordUserId) {
+      missingDiscordLinks.push(member.displayName);
+      skipped.push({
+        displayName: member.displayName,
+        reason: "missing_discord_link",
+      });
+      continue;
+    }
+
+    let guildMember = guild.members.cache.get(discordUserId) ?? null;
+
+    if (!guildMember) {
+      try {
+        guildMember = await guild.members.fetch(discordUserId);
+      } catch {
+        guildMember = null;
+      }
+    }
+
+    if (!guildMember) {
+      skipped.push({
+        displayName: member.displayName,
+        reason: "discord_user_not_in_guild",
+      });
+      continue;
+    }
+
+    if (guildMember.roles.cache.has(teamRole.id)) {
+      skipped.push({
+        displayName: member.displayName,
+        reason: "team_role_already_assigned",
+      });
+      continue;
+    }
+
+    try {
+      await guildMember.roles.add(
+        teamRole,
+        `Development Division setup for ${team.teamName}`
+      );
+      assigned.push(member.displayName);
+    } catch (error) {
+      skipped.push({
+        displayName: member.displayName,
+        reason:
+          error instanceof Error
+            ? `role_assign_failed:${error.message}`
+            : "role_assign_failed",
+      });
+    }
+  }
+
   return {
     teamRole,
     voiceChannel,
     roleAction,
     voiceAction,
     players,
+    memberAssignments: {
+      assigned,
+      skipped,
+      missingDiscordLinks,
+    },
   };
 }
