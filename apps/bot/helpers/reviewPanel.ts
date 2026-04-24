@@ -339,10 +339,6 @@ export async function buildApprovedSetupRecoveryPanel(
           .setLabel("Backfill Map Bans")
           .setStyle(ButtonStyle.Success),
         new ButtonBuilder()
-          .setCustomId("review_diag_map_bans_7c")
-          .setLabel("7C Map-Ban Diagnostic")
-          .setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder()
           .setCustomId("review_queue_pending")
           .setLabel("Back to Review")
           .setStyle(ButtonStyle.Secondary)
