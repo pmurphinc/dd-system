@@ -14,7 +14,7 @@ export const registerCommand: BotCommand = {
     .setDescription("Shows the Development Division registration link"),
 
   async execute(interaction: ChatInputCommandInteraction) {
-    const registrationUrl = "https://forms.gle/PASTE-YOUR-GOOGLE-FORM-LINK-HERE";
+    const registrationUrl = "https://forms.gle/MzLNqg3YmPMk7gwK8";
 
     const embed = new EmbedBuilder()
       .setTitle("Development Division Registration")
