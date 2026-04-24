@@ -335,6 +335,10 @@ export async function buildApprovedSetupRecoveryPanel(
           .setLabel("Force Discord Setup")
           .setStyle(ButtonStyle.Primary),
         new ButtonBuilder()
+          .setCustomId("review_backfill_map_bans")
+          .setLabel("Backfill Map Bans")
+          .setStyle(ButtonStyle.Success),
+        new ButtonBuilder()
           .setCustomId("review_queue_pending")
           .setLabel("Back to Review")
           .setStyle(ButtonStyle.Secondary)

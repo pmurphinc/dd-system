@@ -3,6 +3,7 @@ import { prisma } from "./prisma";
 import {
   clearRegistrationImportedTeam,
   getRegistrationById,
+  listRegistrationsByStatus,
   markRegistrationImported,
   StoredRegistrationSubmission,
 } from "./registrations";
@@ -37,6 +38,13 @@ export interface StoredTeam {
   tournamentInstanceId: number | null;
   mapBan: string | null;
   members: StoredTeamMember[];
+}
+
+export interface BackfillMapBansResult {
+  scannedApprovedTeams: number;
+  backfilledTeamMapBans: number;
+  unchanged: number;
+  usedNameFallbackCount: number;
 }
 
 let teamTablesReady: Promise<void> | undefined;
@@ -208,6 +216,10 @@ function buildTeamPayload(submission: StoredRegistrationSubmission) {
     leaderDiscordUserId: submission.leaderDiscordUserId,
     mapBan: submission.mapBan ?? null,
   };
+}
+
+function normalizeTeamNameKey(value: string): string {
+  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "");
 }
 
 async function loadTeamById(id: number): Promise<StoredTeam | null> {
@@ -440,20 +452,26 @@ export async function getTeamBySubmissionId(
 
 export async function syncImportedTeamFromSubmission(
   submission: StoredRegistrationSubmission,
-  actorDiscordUserId: string
+  actorDiscordUserId: string,
+  options?: { allowMapBanOverwrite?: boolean }
 ): Promise<{
   team: StoredTeam | null;
   updated: boolean;
   teamNameChanged: boolean;
   communityChanged: boolean;
   previousTeamName: string | null;
+  usedNameFallback: boolean;
+  mapBanBackfilled: boolean;
+  previousMapBan: string | null;
+  currentMapBan: string | null;
+  discordAssetsMayNeedSync: boolean;
 }> {
   await ensureTeamTables();
 
   const existingBySubmission = submission.importedTeamId
     ? await loadTeamById(submission.importedTeamId)
     : await getTeamBySubmissionId(submission.id);
-  const existingByName = existingBySubmission
+  const existingByNameExact = existingBySubmission
     ? null
     : await prisma.team.findFirst({
         where: { teamName: submission.teamName },
@@ -463,7 +481,29 @@ export async function syncImportedTeamFromSubmission(
           },
         },
       });
-  const existing = existingBySubmission ?? (existingByName ? mapTeam(existingByName) : null);
+  const existingByNameNormalized = existingBySubmission || existingByNameExact
+    ? null
+    : (
+        await prisma.team.findMany({
+          include: {
+            members: {
+              orderBy: { sortOrder: "asc" },
+            },
+          },
+        })
+      ).find(
+        (team) => normalizeTeamNameKey(team.teamName) === normalizeTeamNameKey(submission.teamName)
+      ) ?? null;
+  const existing =
+    existingBySubmission ??
+    (existingByNameExact ? mapTeam(existingByNameExact) : null) ??
+    (existingByNameNormalized ? mapTeam(existingByNameNormalized) : null);
+  const usedNameFallback = Boolean(!existingBySubmission && !existingByNameExact && existingByNameNormalized);
+  const allowMapBanOverwrite = options?.allowMapBanOverwrite === true;
+  const incomingMapBan =
+    allowMapBanOverwrite
+      ? (submission.mapBan ?? null)
+      : (existing?.mapBan ?? submission.mapBan ?? null);
 
   const payload = buildTeamPayload(submission);
   const teamNameChanged = Boolean(existing && existing.teamName !== submission.teamName);
@@ -480,7 +520,7 @@ export async function syncImportedTeamFromSubmission(
     JSON.stringify(existing.playerNames) !== payload.playerNames ||
     existing.substituteName !== payload.substituteName ||
     existing.leaderDiscordUserId !== payload.leaderDiscordUserId ||
-    existing.mapBan !== payload.mapBan ||
+    existing.mapBan !== incomingMapBan ||
     existing.importedFromSubmissionId !== submission.id;
 
   const existingMembers = existing
@@ -510,6 +550,7 @@ export async function syncImportedTeamFromSubmission(
             data: {
               teamName: submission.teamName,
               ...payload,
+              mapBan: incomingMapBan,
               importedFromSubmissionId: submission.id,
             },
             include: {
@@ -530,6 +571,7 @@ export async function syncImportedTeamFromSubmission(
           data: {
             teamName: submission.teamName,
             ...payload,
+            mapBan: incomingMapBan,
             importedFromSubmissionId: submission.id,
           },
           include: {
@@ -569,6 +611,33 @@ export async function syncImportedTeamFromSubmission(
     await markRegistrationImported(submission.id, persisted.id, actorDiscordUserId);
   }
 
+  const previousMapBan = existing?.mapBan ?? null;
+  const currentMapBan = persisted.mapBan ?? null;
+  const mapBanBackfilled =
+    Boolean(existing) && previousMapBan !== currentMapBan && Boolean(currentMapBan);
+
+  if (usedNameFallback) {
+    await createAuditLog({
+      action: "team_sync_name_fallback_used",
+      entityType: "team",
+      entityId: `${persisted.id}`,
+      summary: `Team sync used name fallback for ${persisted.teamName}.`,
+      details: `Submission ${submission.id} had no stable linked team identifier; matched by normalized team name.`,
+      actorDiscordUserId,
+    });
+  }
+
+  if (mapBanBackfilled) {
+    await createAuditLog({
+      action: "team_map_ban_backfilled",
+      entityType: "team",
+      entityId: `${persisted.id}`,
+      summary: `Backfilled map ban for ${persisted.teamName}.`,
+      details: `Old value: ${previousMapBan ?? "null"}. New value: ${currentMapBan ?? "null"}. Source sheet: ${submission.sourceLabel ?? "unknown"}.`,
+      actorDiscordUserId,
+    });
+  }
+
   if (!existing) {
     await createAuditLog({
       action: "team_imported_from_registration",
@@ -585,6 +654,11 @@ export async function syncImportedTeamFromSubmission(
       teamNameChanged: false,
       communityChanged: false,
       previousTeamName: null,
+      usedNameFallback,
+      mapBanBackfilled,
+      previousMapBan,
+      currentMapBan,
+      discordAssetsMayNeedSync: true,
     };
   }
 
@@ -595,6 +669,11 @@ export async function syncImportedTeamFromSubmission(
       teamNameChanged: false,
       communityChanged: false,
       previousTeamName: existing.teamName,
+      usedNameFallback,
+      mapBanBackfilled: false,
+      previousMapBan,
+      currentMapBan,
+      discordAssetsMayNeedSync: false,
     };
   }
 
@@ -619,9 +698,76 @@ export async function syncImportedTeamFromSubmission(
   return {
     team: mapTeam(persisted),
     updated: true,
-    teamNameChanged,
-    communityChanged,
-    previousTeamName: existing.teamName,
+      teamNameChanged,
+      communityChanged,
+      previousTeamName: existing.teamName,
+      usedNameFallback,
+      mapBanBackfilled,
+      previousMapBan,
+      currentMapBan,
+      discordAssetsMayNeedSync: teamNameChanged || communityChanged || !existing.discordRoleId || !existing.voiceChannelId,
+  };
+}
+
+export async function backfillApprovedImportedTeamMapBans(
+  actorDiscordUserId: string,
+  allowMapBanOverwrite = false
+): Promise<BackfillMapBansResult> {
+  await ensureTeamTables();
+  const loadedApproved = await listRegistrationsByStatus("approved", 500);
+
+  let backfilledTeamMapBans = 0;
+  let unchanged = 0;
+  let usedNameFallbackCount = 0;
+  let scannedApprovedTeams = 0;
+
+  for (const submission of loadedApproved) {
+    const linkedTeam = await getTeamBySubmissionId(submission.id);
+    if (!linkedTeam) {
+      continue;
+    }
+    scannedApprovedTeams += 1;
+    if (linkedTeam.mapBan) {
+      unchanged += 1;
+      continue;
+    }
+    if (!submission.mapBan) {
+      unchanged += 1;
+      continue;
+    }
+
+    const syncResult = await syncImportedTeamFromSubmission(submission, actorDiscordUserId, {
+      allowMapBanOverwrite,
+    });
+
+    if (!syncResult.team) {
+      unchanged += 1;
+      continue;
+    }
+
+    if (syncResult.usedNameFallback) {
+      usedNameFallbackCount += 1;
+    }
+
+    if (syncResult.mapBanBackfilled) {
+      backfilledTeamMapBans += 1;
+    } else {
+      unchanged += 1;
+    }
+  }
+
+  if (backfilledTeamMapBans > 0) {
+    notifyPanelDataChanged({
+      reason: "team_map_ban_backfilled",
+      panelTypes: ["admin", "tournament"],
+    });
+  }
+
+  return {
+    scannedApprovedTeams,
+    backfilledTeamMapBans,
+    unchanged,
+    usedNameFallbackCount,
   };
 }
 
