@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
-import { evaluateTeamPanelAccessDecision } from "./permissions";
+import {
+  evaluateTeamPanelAccessDecision,
+  evaluateTournamentPanelAccessDecision,
+} from "./permissions";
 
 function runTest(name: string, fn: () => void) {
   try {
@@ -64,4 +67,105 @@ runTest("user with no team association is denied", () => {
   });
   assert.equal(result.allowed, false);
   assert.equal(result.reason, "not_member_of_team");
+});
+
+runTest("tournament panel: Founder is allowed", () => {
+  const result = evaluateTournamentPanelAccessDecision({
+    inGuild: true,
+    isFounder: true,
+    isGuildOwner: false,
+    hasDiscordAdministratorPermission: false,
+    hasConfiguredAdminRole: false,
+    hasAdminRoleNameFallback: false,
+  });
+  assert.equal(result.allowed, true);
+  assert.equal(result.reason, "founder");
+});
+
+runTest("tournament panel: configured Admin role is allowed", () => {
+  const result = evaluateTournamentPanelAccessDecision({
+    inGuild: true,
+    isFounder: false,
+    isGuildOwner: false,
+    hasDiscordAdministratorPermission: false,
+    hasConfiguredAdminRole: true,
+    hasAdminRoleNameFallback: false,
+  });
+  assert.equal(result.allowed, true);
+  assert.equal(result.reason, "configured_admin_role");
+});
+
+runTest("tournament panel: Admin role name fallback is allowed when config role ID is missing", () => {
+  const result = evaluateTournamentPanelAccessDecision({
+    inGuild: true,
+    isFounder: false,
+    isGuildOwner: false,
+    hasDiscordAdministratorPermission: false,
+    hasConfiguredAdminRole: false,
+    hasAdminRoleNameFallback: true,
+  });
+  assert.equal(result.allowed, true);
+  assert.equal(result.reason, "admin_role_name_fallback");
+});
+
+runTest("tournament panel: Team Leader without Admin is denied", () => {
+  const result = evaluateTournamentPanelAccessDecision({
+    inGuild: true,
+    isFounder: false,
+    isGuildOwner: false,
+    hasDiscordAdministratorPermission: false,
+    hasConfiguredAdminRole: false,
+    hasAdminRoleNameFallback: false,
+  });
+  assert.equal(result.allowed, false);
+  assert.equal(result.reason, "missing_founder_or_admin");
+});
+
+runTest("tournament panel: regular Player is denied", () => {
+  const result = evaluateTournamentPanelAccessDecision({
+    inGuild: true,
+    isFounder: false,
+    isGuildOwner: false,
+    hasDiscordAdministratorPermission: false,
+    hasConfiguredAdminRole: false,
+    hasAdminRoleNameFallback: false,
+  });
+  assert.equal(result.allowed, false);
+  assert.equal(result.reason, "missing_founder_or_admin");
+});
+
+runTest("tournament:* button route allows Admin", () => {
+  const result = evaluateTournamentPanelAccessDecision({
+    inGuild: true,
+    isFounder: false,
+    isGuildOwner: false,
+    hasDiscordAdministratorPermission: false,
+    hasConfiguredAdminRole: true,
+    hasAdminRoleNameFallback: false,
+  });
+  assert.equal(result.allowed, true);
+});
+
+runTest("tournament:* select route allows Admin", () => {
+  const result = evaluateTournamentPanelAccessDecision({
+    inGuild: true,
+    isFounder: false,
+    isGuildOwner: false,
+    hasDiscordAdministratorPermission: false,
+    hasConfiguredAdminRole: true,
+    hasAdminRoleNameFallback: false,
+  });
+  assert.equal(result.allowed, true);
+});
+
+runTest("tournament:* modal route allows Admin", () => {
+  const result = evaluateTournamentPanelAccessDecision({
+    inGuild: true,
+    isFounder: false,
+    isGuildOwner: false,
+    hasDiscordAdministratorPermission: false,
+    hasConfiguredAdminRole: true,
+    hasAdminRoleNameFallback: false,
+  });
+  assert.equal(result.allowed, true);
 });

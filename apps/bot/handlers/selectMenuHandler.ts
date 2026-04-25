@@ -7,7 +7,10 @@ import {
   TextInputBuilder,
   TextInputStyle,
 } from "discord.js";
-import { hasAdminInteractionAccess } from "../helpers/permissions";
+import {
+  canManageTournamentPanel,
+  hasAdminInteractionAccess,
+} from "../helpers/permissions";
 import {
   buildApprovedSetupRecoveryPanel,
   buildReviewPanel,
@@ -128,9 +131,9 @@ export async function handleSelectMenuInteraction(
   }
 
   if (interaction.customId === "tournament_select_place_team") {
-    if (!(await hasAdminInteractionAccess(interaction))) {
+    if (!(await canManageTournamentPanel(interaction))) {
       await interaction.reply({
-        content: "You do not have permission to use this action.",
+        content: "Only Founder or Admin users can use the tournament panel.",
         ephemeral: true,
       });
       return;
@@ -149,9 +152,9 @@ export async function handleSelectMenuInteraction(
   }
 
   if (interaction.customId === "tournament_select_checkin_team") {
-    if (!(await hasAdminInteractionAccess(interaction))) {
+    if (!(await canManageTournamentPanel(interaction))) {
       await interaction.reply({
-        content: "You do not have permission to use this action.",
+        content: "Only Founder or Admin users can use the tournament panel.",
         ephemeral: true,
       });
       return;
@@ -186,9 +189,9 @@ export async function handleSelectMenuInteraction(
   }
 
   if (interaction.customId === "tournament_select_result_assignment") {
-    if (!(await hasAdminInteractionAccess(interaction))) {
+    if (!(await canManageTournamentPanel(interaction))) {
       await interaction.reply({
-        content: "You do not have permission to use this action.",
+        content: "Only Founder or Admin users can use the tournament panel.",
         ephemeral: true,
       });
       return;

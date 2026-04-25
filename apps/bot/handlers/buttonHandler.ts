@@ -9,7 +9,10 @@ import {
 import { buildCheckinPanel } from "../helpers/checkinPanel";
 import { getCycleCompletionStatus } from "../helpers/cycleCompletion";
 import { buildMatchPanel } from "../helpers/matchPanel";
-import { hasAdminInteractionAccess } from "../helpers/permissions";
+import {
+  canManageTournamentPanel,
+  hasAdminInteractionAccess,
+} from "../helpers/permissions";
 import { buildReportPanel } from "../helpers/reportPanel";
 import { buildReportsPanel } from "../helpers/reportsPanel";
 import {
@@ -462,12 +465,21 @@ export async function handleButtonInteraction(
 
   const isAdminAction =
     interaction.customId.startsWith("review_") ||
-    interaction.customId.startsWith("reports_") ||
-    interaction.customId.startsWith("tournament_");
+    interaction.customId.startsWith("reports_");
+
+  const isLegacyTournamentAction = interaction.customId.startsWith("tournament_");
 
   if (isAdminAction && !(await hasAdminInteractionAccess(interaction))) {
     await interaction.reply({
       content: "You do not have permission to use this action.",
+      ephemeral: true,
+    });
+    return;
+  }
+
+  if (isLegacyTournamentAction && !(await canManageTournamentPanel(interaction))) {
+    await interaction.reply({
+      content: "Only Founder or Admin users can use the tournament panel.",
       ephemeral: true,
     });
     return;

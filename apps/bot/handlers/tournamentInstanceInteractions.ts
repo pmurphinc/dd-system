@@ -24,9 +24,9 @@ import {
   buildTournamentPanel,
 } from "../helpers/tournamentPanel";
 import {
+  canManageTournamentPanel,
   canManageTeamPanel,
   canSubmitTeamCashoutPlacement,
-  hasAdminInteractionAccess,
 } from "../helpers/permissions";
 import {
   getCashoutPlacementForCycle,
@@ -1039,9 +1039,9 @@ export async function handleTournamentInstanceButton(
       return true;
     }
 
-    if (!(await hasAdminInteractionAccess(interaction))) {
+    if (!(await canManageTournamentPanel(interaction))) {
       await interaction.reply({
-        content: "You do not have permission to use this action.",
+        content: "Only Founder or Admin users can use the tournament panel.",
         flags: MessageFlags.Ephemeral,
       });
       return true;
@@ -1324,9 +1324,9 @@ export async function handleTournamentInstanceButton(
 
   // Every tournament:* interaction route is expected to flow through the same
   // shared admin helper so slash access and panel follow-ups stay aligned.
-  if (!(await hasAdminInteractionAccess(interaction))) {
+  if (!(await canManageTournamentPanel(interaction))) {
     await interaction.reply({
-      content: "You do not have permission to use this action.",
+      content: "Only Founder or Admin users can use the tournament panel.",
       flags: MessageFlags.Ephemeral,
     });
     return true;
@@ -2045,9 +2045,9 @@ export async function handleTournamentInstanceSelectMenu(
   };
 
   if (interaction.customId === "tournament:select_instance") {
-    if (!(await hasAdminInteractionAccess(interaction))) {
+    if (!(await canManageTournamentPanel(interaction))) {
       await interaction.reply({
-        content: "You do not have permission to use this action.",
+        content: "Only Founder or Admin users can use the tournament panel.",
         flags: MessageFlags.Ephemeral,
       });
       return true;
@@ -2300,9 +2300,9 @@ export async function handleTournamentInstanceSelectMenu(
   }
 
   if (interaction.customId.startsWith("tournament:select_team_submission:")) {
-    if (!(await hasAdminInteractionAccess(interaction))) {
+    if (!(await canManageTournamentPanel(interaction))) {
       await interaction.reply({
-        content: "You do not have permission to use this action.",
+        content: "Only Founder or Admin users can use the tournament panel.",
         flags: MessageFlags.Ephemeral,
       });
       return true;
@@ -2359,9 +2359,9 @@ export async function handleTournamentInstanceModal(
   };
 
   if (interaction.customId.startsWith("tournament:reject_matchup_modal:")) {
-    if (!(await hasAdminInteractionAccess(interaction))) {
+    if (!(await canManageTournamentPanel(interaction))) {
       await interaction.reply({
-        content: "You do not have permission to use this action.",
+        content: "Only Founder or Admin users can use the tournament panel.",
         flags: MessageFlags.Ephemeral,
       });
       return true;
@@ -2396,9 +2396,9 @@ export async function handleTournamentInstanceModal(
   }
 
   if (interaction.customId.startsWith("tournament:reject_submission_modal:")) {
-    if (!(await hasAdminInteractionAccess(interaction))) {
+    if (!(await canManageTournamentPanel(interaction))) {
       await interaction.reply({
-        content: "You do not have permission to use this action.",
+        content: "Only Founder or Admin users can use the tournament panel.",
         flags: MessageFlags.Ephemeral,
       });
       return true;
@@ -2428,9 +2428,9 @@ export async function handleTournamentInstanceModal(
   }
 
   if (interaction.customId.startsWith("tournament:override_modal:")) {
-    if (!(await hasAdminInteractionAccess(interaction))) {
+    if (!(await canManageTournamentPanel(interaction))) {
       await interaction.reply({
-        content: "You do not have permission to use this action.",
+        content: "Only Founder or Admin users can use the tournament panel.",
         flags: MessageFlags.Ephemeral,
       });
       return true;
