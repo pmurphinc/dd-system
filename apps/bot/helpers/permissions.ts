@@ -18,7 +18,7 @@ const ADMIN_ROLE_NAME_ALIASES = ["Admin", "Admins", "Administrator"] as const;
 const FOUNDER_ROLE_NAME_ALIASES = ["Founder"] as const;
 
 interface ResolvedRoleIds {
-  adminRoleIds: string[];
+  adminRoleId: string | null;
   founderRoleId: string | null;
   teamLeaderRoleId: string | null;
   playerRoleId: string | null;
@@ -58,6 +58,50 @@ export interface TeamPanelAccessResult {
   allowed: boolean;
   reason: TeamPanelAccessReason;
   leaderAccess: TeamLeaderAccessDebug;
+}
+
+export type TournamentPanelAccessReason =
+  | "not_in_guild"
+  | "founder"
+  | "guild_owner"
+  | "discord_admin_permission"
+  | "configured_admin_role"
+  | "admin_role_name_fallback"
+  | "missing_founder_or_admin";
+
+export function evaluateTournamentPanelAccessDecision(params: {
+  inGuild: boolean;
+  isFounder: boolean;
+  isGuildOwner: boolean;
+  hasDiscordAdministratorPermission: boolean;
+  hasConfiguredAdminRole: boolean;
+  hasAdminRoleNameFallback: boolean;
+}): { allowed: boolean; reason: TournamentPanelAccessReason } {
+  if (!params.inGuild) {
+    return { allowed: false, reason: "not_in_guild" };
+  }
+
+  if (params.isFounder) {
+    return { allowed: true, reason: "founder" };
+  }
+
+  if (params.isGuildOwner) {
+    return { allowed: true, reason: "guild_owner" };
+  }
+
+  if (params.hasDiscordAdministratorPermission) {
+    return { allowed: true, reason: "discord_admin_permission" };
+  }
+
+  if (params.hasConfiguredAdminRole) {
+    return { allowed: true, reason: "configured_admin_role" };
+  }
+
+  if (params.hasAdminRoleNameFallback) {
+    return { allowed: true, reason: "admin_role_name_fallback" };
+  }
+
+  return { allowed: false, reason: "missing_founder_or_admin" };
 }
 
 export function evaluateTeamPanelAccessDecision(params: {
@@ -221,12 +265,8 @@ async function resolveConfiguredRoleIds(
 ): Promise<ResolvedRoleIds> {
   const config = await ensureGuildRoleConfig(guildId, roles);
 
-  const adminRoleIds = [config?.adminRoleId, config?.founderRoleId].filter(
-    (roleId): roleId is string => Boolean(roleId)
-  );
-
   return {
-    adminRoleIds,
+    adminRoleId: config?.adminRoleId ?? null,
     founderRoleId: config?.founderRoleId ?? null,
     teamLeaderRoleId: config?.teamLeaderRoleId ?? null,
     playerRoleId: config?.playerRoleId ?? null,
@@ -257,8 +297,9 @@ async function resolveMemberAccessFlags(
       : hasNamedFounderRole,
     isAdmin:
       hasDiscordAdmin ||
-      hasNamedAdminRole ||
-      configuredRoles.adminRoleIds.some((roleId) => roles.cache.has(roleId)),
+      (configuredRoles.adminRoleId
+        ? roles.cache.has(configuredRoles.adminRoleId)
+        : hasNamedAdminRole),
     isTeamLeader: configuredRoles.teamLeaderRoleId
       ? roles.cache.has(configuredRoles.teamLeaderRoleId)
       : hasNamedTeamLeaderRole,
@@ -403,7 +444,7 @@ export async function hasAdminInteractionAccess(
     interaction.guildId,
     interaction.member.roles
   );
-  return memberAccess.isAdmin;
+  return memberAccess.isAdmin || memberAccess.isFounder;
 }
 
 export async function hasFounderInteractionAccess(
@@ -421,6 +462,57 @@ export async function hasFounderInteractionAccess(
     interaction.member.roles
   );
   return memberAccess.isFounder;
+}
+
+export async function canManageTournamentPanel(
+  interaction:
+    | ButtonInteraction
+    | ModalSubmitInteraction
+    | StringSelectMenuInteraction
+): Promise<boolean> {
+  const guildId = interaction.guildId ?? null;
+  const userId = interaction.user.id;
+  const customId = interaction.customId;
+
+  if (!interaction.inCachedGuild()) {
+    console.warn("[tournament-panel-access-denied]", {
+      guildId,
+      userId,
+      customId,
+      reason: "not_in_guild",
+    });
+    return false;
+  }
+
+  const configuredRoles = await resolveConfiguredRoleIds(
+    interaction.guildId,
+    interaction.member.roles
+  );
+  const hasAdminRoleNameFallback =
+    !configuredRoles.adminRoleId &&
+    Boolean(findRoleIdByName(interaction.member.roles, ADMIN_ROLE_NAME_ALIASES));
+  const decision = evaluateTournamentPanelAccessDecision({
+    inGuild: true,
+    isFounder: await hasFounderInteractionAccess(interaction),
+    isGuildOwner: interaction.guild.ownerId === interaction.user.id,
+    hasDiscordAdministratorPermission:
+      interaction.member.permissions.has(PermissionFlagsBits.Administrator),
+    hasConfiguredAdminRole: configuredRoles.adminRoleId
+      ? interaction.member.roles.cache.has(configuredRoles.adminRoleId)
+      : false,
+    hasAdminRoleNameFallback,
+  });
+
+  if (!decision.allowed) {
+    console.warn("[tournament-panel-access-denied]", {
+      guildId: interaction.guildId,
+      userId,
+      customId,
+      reason: decision.reason,
+    });
+  }
+
+  return decision.allowed;
 }
 
 function evaluateExactTeamMembership(

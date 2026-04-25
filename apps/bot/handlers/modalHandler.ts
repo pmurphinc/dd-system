@@ -1,6 +1,9 @@
 import { ModalSubmitInteraction } from "discord.js";
 import { buildReviewPanel } from "../helpers/reviewPanel";
-import { hasAdminInteractionAccess } from "../helpers/permissions";
+import {
+  canManageTournamentPanel,
+  hasAdminInteractionAccess,
+} from "../helpers/permissions";
 import { buildTournamentPanel } from "../helpers/tournamentPanel";
 import { isFinalRoundReportingOpen } from "../helpers/tournamentAccess";
 import {
@@ -199,9 +202,9 @@ export async function handleModalInteraction(
   }
 
   if (interaction.customId.startsWith("tournament_assign_matchups_modal_")) {
-    if (!(await hasAdminInteractionAccess(interaction))) {
+    if (!(await canManageTournamentPanel(interaction))) {
       await interaction.reply({
-        content: "You do not have permission to use this action.",
+        content: "Only Founder or Admin users can use the tournament panel.",
         ephemeral: true,
       });
       return;
@@ -243,9 +246,9 @@ export async function handleModalInteraction(
   }
 
   if (interaction.customId.startsWith("tournament_record_result_modal_")) {
-    if (!(await hasAdminInteractionAccess(interaction))) {
+    if (!(await canManageTournamentPanel(interaction))) {
       await interaction.reply({
-        content: "You do not have permission to use this action.",
+        content: "Only Founder or Admin users can use the tournament panel.",
         ephemeral: true,
       });
       return;
